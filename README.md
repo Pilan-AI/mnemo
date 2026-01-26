@@ -86,9 +86,9 @@ Works with **any** AI coding assistant:
 Every developer using AI assistants has this problem:
 
 > "I built something similar last week... what did I do?"
-> 
+>
 > "What was that command Claude gave me for Kubernetes?"
-> 
+>
 > "I had this exact conversation before, where is it?"
 
 Your AI conversations are **gold** — full of solved problems, working code, architectural decisions. But they're scattered across tools, buried in log files, impossible to search.
@@ -102,6 +102,8 @@ One index. All tools. Instant search.
 <div align="center">
 
 ## The Story Behind mnemo
+
+**Built in 21 days. Total cost: $420.**
 
 </div>
 
