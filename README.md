@@ -128,6 +128,12 @@ I don't want mnemo to be just another devtool with 1000 users behind it. I want 
 
 I'm Raghu. I build tools so developers don't just write code — they **lead** it.
 
+### The Inspiration (Original Sources)
+
+- 🎬 [Pokkiri - "Plan Panni Pannanum"](https://www.youtube.com/watch?v=XGbbKs9pUsM) — The meme that started it all
+- 🎵 [Jana Nayagan - "Raavana Mavandaa"](https://www.youtube.com/watch?v=9OF_cF48mjA) — Anirudh's anthem of resilience
+- 🎥 [KGF - Leadership Quote](https://www.youtube.com/watch?v=6FTnjjxmVTE) — "1000 people behind you vs in front of you"
+
 ---
 
 ## License
