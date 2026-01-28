@@ -6,13 +6,12 @@
 
 > **Intelligence Crystallized!**
 
-> "யண்டா ஒரு விஷயத்தையும் plan பண்ணாம பண்ண இப்படித்தான்...
-> Plan பண்ணி பண்ணணும்!"
+> "Plan panni pannama irundha ippudi dhan! Plan panni pannaum. Okay?"
 >
 > *"This is what happens when you do things without planning...
 > You must plan properly!"*
 >
-> — Pokkiri (2007)
+> — Vaigai Puyal Vadivelu (2007)
 
 <br>
 
