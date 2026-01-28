@@ -1,4 +1,4 @@
-module github.com/0xRaghu/mnemo
+module github.com/Pilan-AI/mnemo
 
 go 1.21
 

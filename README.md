@@ -4,6 +4,8 @@
 
 ### Memory for AI-assisted development
 
+> **Intelligence Crystallized!**
+
 > "யண்டா ஒரு விஷயத்தையும் plan பண்ணாம பண்ண இப்படித்தான்...
 > Plan பண்ணி பண்ணணும்!"
 >
@@ -24,10 +26,10 @@
 
 ```bash
 # macOS / Linux
-brew install 0xraghu/tap/mnemo
+brew install mnemo
 
 # Or build from source
-go install github.com/0xRaghu/mnemo@latest
+go install github.com/Pilan-AI/mnemo@latest
 ```
 
 ## What is this?
@@ -41,7 +43,7 @@ $ mnemo tools
   ✓ Cursor          ~/.cursor
   ✓ Gemini CLI      ~/.gemini
   ...
-  Detected: 6/11 tools
+  Detected: 6/12+ tools
 
 # Index all your conversations
 $ mnemo index
@@ -107,7 +109,7 @@ One index. All tools. Instant search.
 
 </div>
 
-I'm **Raghu** — you'll find me as `0xRaghu` on GitHub and `@Pilan_AI` on X.
+I'm **Raghu** — find me at `@Pilan_AI` on GitHub and X.
 
 I grew up on mass cinema where humour and heroism taught me more about life than any textbook. Vadivelu's "Lochak, Mochak, Bachak" in *Pokkiri* showed me what chaos looks like when nobody really has a plan — everyone shouting moves, nobody landing a punch. Vijay's character, by contrast, cuts through the noise with quiet clarity, doing more than he says.
 
@@ -151,7 +153,7 @@ See [LICENSE](./LICENSE) for details.
 
 <div align="center">
 
-**[GitHub](https://github.com/0xRaghu/mnemo)** · **[Twitter](https://twitter.com/Pilan_AI)**
+**[GitHub](https://github.com/Pilan-AI/mnemo)** · **[X](https://x.com/Pilan_AI)**
 
 *"Plan panni pannanum" — but also index properly.*
 

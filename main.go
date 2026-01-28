@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/0xRaghu/mnemo/cmd"
+	"github.com/Pilan-AI/mnemo/cmd"
 )
 
 func main() {
