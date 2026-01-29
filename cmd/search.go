@@ -1,12 +1,10 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/Pilan-AI/mnemo/internal/db"
 	"github.com/spf13/cobra"
 )
 
@@ -18,89 +16,52 @@ var (
 var searchCmd = &cobra.Command{
 	Use:   "search <query>",
 	Short: "Search across all indexed conversations",
-	Long:  "Full-text search across all your AI coding sessions.",
+	Long:  "Full-text search across all your AI coding sessions using SQLite FTS5.",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		query := strings.Join(args, " ")
-		home, _ := os.UserHomeDir()
-		mnemoDir := filepath.Join(home, ".mnemo")
-		
+
 		fmt.Printf("Searching for: %s\n", query)
 		fmt.Println()
-		
-		// Load Claude index
-		indexPath := filepath.Join(mnemoDir, "claude-index.json")
-		if !pathExists(indexPath) {
-			fmt.Println("No index found. Run 'mnemo index' first.")
+
+		// Initialize database
+		if err := db.InitDB(); err != nil {
+			fmt.Printf("Error opening database: %v\n", err)
+			fmt.Println("Run 'mnemo index' first to build the search index.")
 			return
 		}
-		
-		data, err := os.ReadFile(indexPath)
+		defer db.CloseDB()
+
+		// Perform FTS5 search
+		results, err := db.Search(query, searchLimit)
 		if err != nil {
-			fmt.Printf("Error reading index: %v\n", err)
+			fmt.Printf("Search error: %v\n", err)
 			return
 		}
-		
-		var index []map[string]interface{}
-		json.Unmarshal(data, &index)
-		
-		results := searchIndex(index, query)
-		
+
 		if len(results) == 0 {
 			fmt.Println("No results found.")
+			fmt.Println()
+			fmt.Println("Tips:")
+			fmt.Println("  - Try different keywords")
+			fmt.Println("  - Run 'mnemo index --force' to rebuild the index")
 			return
 		}
-		
+
 		fmt.Printf("Found %d results:\n\n", len(results))
-		
-		for i, result := range results {
-			if i >= searchLimit {
-				fmt.Printf("\n... and %d more. Use --limit to show more.\n", len(results)-searchLimit)
-				break
-			}
-			
-			project := result["project"].(string)
-			firstQuery := ""
-			if fq, ok := result["firstQuery"].(string); ok {
-				firstQuery = fq
-			}
-			messages := int(result["messages"].(float64))
-			
-			fmt.Printf("[%d] %s\n", i+1, project)
-			fmt.Printf("    Messages: %d\n", messages)
-			if firstQuery != "" {
-				fmt.Printf("    Query: %s\n", truncate(firstQuery, 80))
-			}
+
+		for i, r := range results {
+			fmt.Printf("[%d] %s\n", i+1, r.Project)
+			fmt.Printf("    Role: %s\n", r.Role)
+
+			// Show snippet with highlights
+			snippet := r.Snippet
+			snippet = strings.ReplaceAll(snippet, ">>>", "\033[1;33m") // Bold yellow
+			snippet = strings.ReplaceAll(snippet, "<<<", "\033[0m")    // Reset
+			fmt.Printf("    Match: %s\n", snippet)
 			fmt.Println()
 		}
 	},
-}
-
-func searchIndex(index []map[string]interface{}, query string) []map[string]interface{} {
-	var results []map[string]interface{}
-	queryLower := strings.ToLower(query)
-	
-	for _, entry := range index {
-		// Search in project name
-		if project, ok := entry["project"].(string); ok {
-			if strings.Contains(strings.ToLower(project), queryLower) {
-				results = append(results, entry)
-				continue
-			}
-		}
-		
-		// Search in first query
-		if firstQuery, ok := entry["firstQuery"].(string); ok {
-			if strings.Contains(strings.ToLower(firstQuery), queryLower) {
-				results = append(results, entry)
-				continue
-			}
-		}
-		
-		// TODO: Full content search with SQLite FTS5
-	}
-	
-	return results
 }
 
 func init() {
