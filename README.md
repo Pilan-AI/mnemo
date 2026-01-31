@@ -5,17 +5,14 @@
 ### Memory for AI-assisted development
 
 > **Intelligence Crystallized!**
-
-> "Plan panni pannama irundha ippudi dhan! Plan panni pannaum. Okay?"
 >
-> *"This is what happens when you do things without planning...
-> You must plan properly!"*
+> "The faintest ink is more powerful than the strongest memory."
 >
-> — Vaigai Puyal Vadivelu (2007)
+> — Chinese Proverb
 
 <br>
 
-**Don't be the Lochak-Mochak engineer. Be the one who ships.**
+**Index your past to build your future.**
 
 </div>
 
@@ -110,32 +107,19 @@ One index. All tools. Instant search.
 
 I'm **Raghu** — find me at `@Pilan_AI` on GitHub and X.
 
-I grew up on mass cinema where humour and heroism taught me more about life than any textbook. Vadivelu's "Lochak, Mochak, Bachak" in *Pokkiri* showed me what chaos looks like when nobody really has a plan — everyone shouting moves, nobody landing a punch. Vijay's character, by contrast, cuts through the noise with quiet clarity, doing more than he says.
+Every developer using AI assistants faces the same problem: valuable conversations scattered across tools, impossible to search, lost to time. After months of watching myself and others repeatedly solve the same problems because we couldn't find our past solutions, I built mnemo.
 
-That contrast is burned into how I think about engineering: **don't be the Lochak-Mochak architect, be the one who actually ships.**
+The philosophy is simple: **your AI conversations are knowledge artifacts that deserve to be searchable, reusable, and permanent.**
 
-Years later, while building developer tools, I had *Jana Nayagan*'s "Raavana Mavandaa" on loop. The line *"Edhiriya anuppuna, sirikkiran, pazhagittan pola"* became a mirror: if you've been attacked by enough bugs, criticism, and setbacks, you stop panicking — you start smiling. You've *pazhagittan pola* with chaos.
+mnemo exists because:
 
-Underneath all this is the line from *KGF* that became my personal operating system:
+- **Memory matters** — Every solved problem, every working solution, every architectural decision in your AI conversations is valuable
+- **Search is power** — Being able to instantly find "how did I solve X last month?" transforms how you work
+- **Tools should unite, not divide** — Your knowledge shouldn't be fragmented across different AI assistants
 
-> **If you only have the courage that "1000 people are behind you", you might win one battle.**
-> **When those same 1000 people get the courage that *you* are in front of them, you can win the world.**
+I built mnemo in 21 days because I needed it yesterday. The $420 cost proves that focused execution beats endless planning.
 
-I don't want mnemo to be just another devtool with 1000 users behind it. I want 1000 builders to feel braver because mnemo stands in front of them — simplifying complexity, catching Lochak-Mochak patterns before they spiral, and turning production fear into a calm, Raavana-style smile.
-
-**mnemo** is my tribute:
-
-- To **Vadivelu**, for teaching me that overconfidence without clarity is comedy.
-- To **Vijay**, for showing how calm focus can turn noise into direction.
-- To **KGF**, for reminding me that true leadership is when others borrow courage from you.
-
-I'm Raghu. I build tools so developers don't just write code — they **lead** it.
-
-### The Inspiration (Original Sources)
-
-- 🎬 [Pokkiri - "Plan Panni Pannanum"](https://www.youtube.com/watch?v=XGbbKs9pUsM) — The meme that started it all
-- 🎵 [Jana Nayagan - "Raavana Mavandaa"](https://www.youtube.com/watch?v=9OF_cF48mjA) — Anirudh's anthem of resilience
-- 🎥 [KGF - Leadership Quote](https://www.youtube.com/watch?v=6FTnjjxmVTE) — "1000 people behind you vs in front of you"
+If you're tired of re-solving problems you've already solved, mnemo is for you.
 
 ---
 
@@ -154,6 +138,6 @@ See [LICENSE](./LICENSE) for details.
 
 **[GitHub](https://github.com/Pilan-AI/mnemo)** · **[X](https://x.com/Pilan_AI)**
 
-*"Plan panni pannanum" — but also index properly.*
+*Memory indexed. Knowledge unlocked.*
 
 </div>

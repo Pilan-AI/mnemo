@@ -267,7 +267,7 @@ func (m Model) viewIntro() string {
 	// Gradient separator
 	b.WriteString("    " + RenderGradientLine(50) + "\n\n")
 
-	// Quote
+	// Philosophy quote
 	if m.introFade >= 8 {
 		quote := lipgloss.NewStyle().
 			Foreground(TextDim).
@@ -275,9 +275,9 @@ func (m Model) viewIntro() string {
 			Align(lipgloss.Center).
 			Width(BannerWidth)
 
-		b.WriteString(quote.Render(`"Plan panni pannanum, plan panni pannala na ippudi dhan agum"`))
+		b.WriteString(quote.Render(`"The faintest ink is more powerful than the strongest memory."`))
 		b.WriteString("\n")
-		b.WriteString(quote.Render("— Pokkiri (2007)"))
+		b.WriteString(quote.Render("— Chinese Proverb"))
 		b.WriteString("\n\n")
 	}
 
@@ -604,9 +604,9 @@ func (m Model) viewComplete() string {
 		Align(lipgloss.Center).
 		Width(50)
 
-	b.WriteString(quote.Render("Don't be the Lochak-Mochak engineer."))
+	b.WriteString(quote.Render("Memory without search is just noise."))
 	b.WriteString("\n")
-	b.WriteString(quote.Render("Be the one who ships."))
+	b.WriteString(quote.Render("Search without memory is just hope."))
 	b.WriteString("\n\n")
 
 	// Exit hint
