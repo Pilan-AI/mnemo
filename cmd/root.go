@@ -68,18 +68,6 @@ Index your past to build your future.
 Your AI coding sessions — indexed, searchable, never forgotten.`,
 }
 
-func init() {
-	rootCmd.AddCommand(indexCmd)
-	rootCmd.AddCommand(searchCmd)
-	rootCmd.AddCommand(recentCmd)
-	rootCmd.AddCommand(contextCmd)
-	rootCmd.AddCommand(installCmd)
-	rootCmd.AddCommand(versionCmd)
-	rootCmd.AddCommand(toolsCmd)
-	rootCmd.AddCommand(addCmd)
-	rootCmd.AddCommand(configureCmd)
-}
-
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -88,5 +76,6 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.AddCommand(configureCmd)
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 }

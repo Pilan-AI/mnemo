@@ -14,6 +14,11 @@ brew install mnemo
 go install github.com/Pilan-AI/mnemo@latest
 ```
 
+**Optional:** See the welcome experience
+```bash
+mnemo onboarding
+```
+
 ---
 
 ## 2. First Run - Index Your Sessions
