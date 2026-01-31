@@ -67,7 +67,7 @@ Examples:
 		fileCount := 0
 		totalBytes := int64(0)
 
-		filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
+		if err := filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -119,7 +119,10 @@ Examples:
 			totalBytes += info.Size()
 
 			return nil
-		})
+		}); err != nil {
+			fmt.Printf("Error walking directory: %v\n", err)
+			os.Exit(1)
+		}
 
 		fmt.Printf("  ✓ Indexed %d files (%.2f MB)\n", fileCount, float64(totalBytes)/1024/1024)
 		fmt.Println()
@@ -132,7 +135,7 @@ func readFileContent(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Limit to 1MB per file
 	data, err := io.ReadAll(io.LimitReader(file, 1024*1024))

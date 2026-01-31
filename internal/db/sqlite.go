@@ -39,7 +39,7 @@ type SearchResult struct {
 func InitDB() error {
 	home, _ := os.UserHomeDir()
 	mnemoDir := filepath.Join(home, ".mnemo")
-	os.MkdirAll(mnemoDir, 0755)
+	_ = os.MkdirAll(mnemoDir, 0755)
 
 	dbPath := filepath.Join(mnemoDir, "mnemo.db")
 
@@ -117,7 +117,7 @@ func InitDB() error {
 // CloseDB closes the database connection
 func CloseDB() {
 	if db != nil {
-		db.Close()
+		_ = db.Close()
 	}
 }
 
@@ -199,7 +199,7 @@ func Search(query string, limit int) ([]SearchResult, error) {
 			m.project,
 			m.role,
 			m.content,
-			snippet(messages_fts, 0, '>>>', '<<<', '...', 32) as snippet,
+			snippet(messages_fts, 0, '>>>', '<<<', '...', 256) as snippet,
 			bm25(messages_fts) as rank
 		FROM messages_fts
 		JOIN messages m ON messages_fts.rowid = m.id
@@ -210,7 +210,7 @@ func Search(query string, limit int) ([]SearchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []SearchResult
 	for rows.Next() {
@@ -240,7 +240,7 @@ func GetRecentSessions(limit int) ([]map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []map[string]interface{}
 	for rows.Next() {

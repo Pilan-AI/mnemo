@@ -468,9 +468,10 @@ func (m Model) viewStats() string {
 	b.WriteString(title.Render("Your Memory at a Glance"))
 	b.WriteString("\n\n")
 
-	// Demo stats if none provided
-	if m.stats.Sessions == 0 {
-		m.stats = Stats{
+	// Use demo stats if none provided
+	stats := m.stats
+	if stats.Sessions == 0 {
+		stats = Stats{
 			Sessions:   1999,
 			Messages:   20896,
 			Projects:   47,
@@ -487,10 +488,10 @@ func (m Model) viewStats() string {
 		icon   string
 		color  lipgloss.Color
 	}{
-		{fmt.Sprintf("%d", m.stats.Sessions), "sessions", "📚", Primary},
-		{fmt.Sprintf("%d", m.stats.Messages), "messages", "💬", Accent},
-		{fmt.Sprintf("%d", m.stats.Projects), "projects", "📁", Secondary},
-		{fmt.Sprintf("%d", m.stats.Days), "days", "📅", Warm},
+		{fmt.Sprintf("%d", stats.Sessions), "sessions", "📚", Primary},
+		{fmt.Sprintf("%d", stats.Messages), "messages", "💬", Accent},
+		{fmt.Sprintf("%d", stats.Projects), "projects", "📁", Secondary},
+		{fmt.Sprintf("%d", stats.Days), "days", "📅", Warm},
 	}
 
 	var statRow strings.Builder
@@ -536,8 +537,8 @@ func (m Model) viewStats() string {
 			Align(lipgloss.Center)
 
 		content := fmt.Sprintf("🏆 Your most active project:\n%s\n%s messages",
-			lipgloss.NewStyle().Foreground(TextBright).Bold(true).Render(m.stats.TopProject),
-			lipgloss.NewStyle().Foreground(Accent).Render(fmt.Sprintf("%d", m.stats.TopCount)),
+			lipgloss.NewStyle().Foreground(TextBright).Bold(true).Render(stats.TopProject),
+			lipgloss.NewStyle().Foreground(Accent).Render(fmt.Sprintf("%d", stats.TopCount)),
 		)
 
 		b.WriteString(highlight.Render(content))
