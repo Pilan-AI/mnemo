@@ -6,9 +6,12 @@
 
 > **Intelligence Crystallized!**
 >
-> "The faintest ink is more powerful than the strongest memory."
+> எண்ணென்ப ஏனை எழுத்தென்ப இவ்விரண்டும்
+> கண்ணென்ப வாழும் உயிர்க்கு.
 >
-> — Chinese Proverb
+> *(Numbers and Letters are the two eyes for the living)*
+>
+> — Thiruvalluvar, Thirukkural
 
 <br>
 
@@ -120,6 +123,21 @@ mnemo exists because:
 I built mnemo in 21 days because I needed it yesterday. The $420 cost proves that focused execution beats endless planning.
 
 If you're tired of re-solving problems you've already solved, mnemo is for you.
+
+---
+
+## Uninstall
+
+```bash
+# If installed via Homebrew
+brew uninstall mnemo
+
+# If installed via Go
+rm $(which mnemo)
+
+# Remove all indexed data (optional)
+rm -rf ~/.mnemo
+```
 
 ---
 
