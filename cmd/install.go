@@ -1,34 +1,84 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"github.com/spf13/cobra"
 )
 
 var installCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Install mnemo plugins for AI tools",
-	Long:  "Install mnemo plugins for Claude Code and OpenCode to enable automatic context injection.",
+	Short: "Install mnemo plugins and MCP server for AI tools",
+	Long: `Install mnemo plugins for Claude Code and OpenCode to enable automatic context injection.
+
+This command will:
+  1. Install Claude Code skill for context keywords
+  2. Install OpenCode plugin for session compaction
+  3. Configure MCP server in Claude Desktop (if installed)
+
+The MCP server provides tools like mnemo_search, mnemo_context, and mnemo_recent
+directly in Claude Desktop.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		home, _ := os.UserHomeDir()
 
-		fmt.Println("Installing mnemo plugins...")
+		fmt.Println("Installing mnemo plugins and MCP server...")
 		fmt.Println()
+
+		// Find mnemo binary path
+		mnemoPath, err := exec.LookPath("mnemo")
+		if err != nil {
+			// Try common locations
+			possiblePaths := []string{
+				filepath.Join(home, "bin", "mnemo"),
+				filepath.Join(home, ".local", "bin", "mnemo"),
+				"/usr/local/bin/mnemo",
+				"/opt/homebrew/bin/mnemo",
+			}
+			for _, p := range possiblePaths {
+				if _, err := os.Stat(p); err == nil {
+					mnemoPath = p
+					break
+				}
+			}
+		}
+		if mnemoPath == "" {
+			fmt.Println("  ⚠ Could not find mnemo binary. MCP server config will use 'mnemo' (must be in PATH)")
+			mnemoPath = "mnemo"
+		}
 
 		// Install Claude Code skill
 		claudeSkillDir := filepath.Join(home, ".claude", "skills", "mnemo")
 		if err := os.MkdirAll(claudeSkillDir, 0755); err != nil {
-			fmt.Printf("  ✗ Claude Code: Failed to create directory: %v\n", err)
+			fmt.Printf("  ✗ Claude Code Skill: Failed to create directory: %v\n", err)
 		} else {
 			skillPath := filepath.Join(claudeSkillDir, "SKILL.md")
 			if err := os.WriteFile(skillPath, []byte(claudeCodeSkill), 0644); err != nil {
-				fmt.Printf("  ✗ Claude Code: Failed to write skill: %v\n", err)
+				fmt.Printf("  ✗ Claude Code Skill: Failed to write skill: %v\n", err)
 			} else {
-				fmt.Printf("  ✓ Claude Code: %s\n", claudeSkillDir)
+				fmt.Printf("  ✓ Claude Code Skill: %s\n", claudeSkillDir)
 			}
+		}
+
+		// Install MCP server config for Claude Desktop
+		var claudeDesktopConfigDir string
+		if runtime.GOOS == "darwin" {
+			claudeDesktopConfigDir = filepath.Join(home, "Library", "Application Support", "Claude")
+		} else if runtime.GOOS == "windows" {
+			claudeDesktopConfigDir = filepath.Join(os.Getenv("APPDATA"), "Claude")
+		} else {
+			claudeDesktopConfigDir = filepath.Join(home, ".config", "claude")
+		}
+
+		configPath := filepath.Join(claudeDesktopConfigDir, "claude_desktop_config.json")
+		if err := installMCPConfig(configPath, mnemoPath); err != nil {
+			fmt.Printf("  ✗ Claude Desktop MCP: %v\n", err)
+		} else {
+			fmt.Printf("  ✓ Claude Desktop MCP: %s\n", configPath)
 		}
 
 		// Install OpenCode plugin
@@ -49,12 +99,60 @@ var installCmd = &cobra.Command{
 		}
 
 		fmt.Println()
-		fmt.Println("Plugins installed! Your AI tools now have access to mnemo memory.")
+		fmt.Println("Installation complete!")
 		fmt.Println()
 		fmt.Println("Features enabled:")
 		fmt.Println("  • Claude Code: Skill auto-activates on context keywords")
+		fmt.Println("  • Claude Desktop: MCP tools (mnemo_search, mnemo_context, mnemo_recent)")
 		fmt.Println("  • OpenCode: Context survives session compaction")
+		fmt.Println()
+		fmt.Println("Note: Restart Claude Desktop to activate MCP server.")
 	},
+}
+
+// installMCPConfig adds or updates mnemo MCP server in Claude Desktop config
+func installMCPConfig(configPath, mnemoPath string) error {
+	// Read existing config or create new one
+	var config map[string]interface{}
+
+	if data, err := os.ReadFile(configPath); err == nil {
+		if err := json.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("failed to parse existing config: %w", err)
+		}
+	} else if os.IsNotExist(err) {
+		// Create directory if needed
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
+		config = make(map[string]interface{})
+	} else {
+		return fmt.Errorf("failed to read config: %w", err)
+	}
+
+	// Ensure mcpServers exists
+	mcpServers, ok := config["mcpServers"].(map[string]interface{})
+	if !ok {
+		mcpServers = make(map[string]interface{})
+		config["mcpServers"] = mcpServers
+	}
+
+	// Add/update mnemo server
+	mcpServers["mnemo"] = map[string]interface{}{
+		"command": mnemoPath,
+		"args":    []string{"serve"},
+	}
+
+	// Write config back
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	return nil
 }
 
 func init() {
