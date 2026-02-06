@@ -88,9 +88,16 @@ var indexCmd = &cobra.Command{
 		totalSessions := 0
 		totalMessages := 0
 
+		shouldIndex := func(toolName string) bool {
+			if indexTool == "" {
+				return true
+			}
+			return strings.EqualFold(indexTool, toolName)
+		}
+
 		// Index Claude Code - main directory (legacy path)
 		claudePath := filepath.Join(home, ".claude", "projects")
-		if pathExists(claudePath) {
+		if pathExists(claudePath) && shouldIndex("claude") {
 			sessions, messages := indexClaudeCode(claudePath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -103,7 +110,7 @@ var indexCmd = &cobra.Command{
 			xdgConfigHome = filepath.Join(home, ".config")
 		}
 		claudeXDGPath := filepath.Join(xdgConfigHome, "claude", "projects")
-		if pathExists(claudeXDGPath) && claudeXDGPath != claudePath {
+		if pathExists(claudeXDGPath) && claudeXDGPath != claudePath && shouldIndex("claude") {
 			sessions, messages := indexClaudeCode(claudeXDGPath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -112,7 +119,7 @@ var indexCmd = &cobra.Command{
 
 		// Index Claude Code - transcripts directory
 		claudeTranscripts := filepath.Join(home, ".claude", "transcripts")
-		if pathExists(claudeTranscripts) {
+		if pathExists(claudeTranscripts) && shouldIndex("claude") {
 			sessions, messages := indexClaudeCode(claudeTranscripts)
 			totalSessions += sessions
 			totalMessages += messages
@@ -121,7 +128,7 @@ var indexCmd = &cobra.Command{
 
 		// Index Claude Code - backup directory (for users who reinstalled)
 		claudeBackup := filepath.Join(home, ".claude-backup")
-		if pathExists(claudeBackup) {
+		if pathExists(claudeBackup) && shouldIndex("claude") {
 			sessions, messages := indexClaudeCode(claudeBackup)
 			totalSessions += sessions
 			totalMessages += messages
@@ -130,7 +137,7 @@ var indexCmd = &cobra.Command{
 
 		// Index Opencode
 		opencodePath := filepath.Join(home, ".local", "share", "opencode")
-		if pathExists(opencodePath) {
+		if pathExists(opencodePath) && shouldIndex("opencode") {
 			sessions, messages := indexOpencode(opencodePath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -139,7 +146,7 @@ var indexCmd = &cobra.Command{
 
 		// Index Gemini CLI
 		geminiSessionsPath := filepath.Join(home, ".gemini", "sessions")
-		if pathExists(geminiSessionsPath) {
+		if pathExists(geminiSessionsPath) && shouldIndex("gemini") {
 			sessions, messages := indexGeminiCLI(geminiSessionsPath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -148,7 +155,7 @@ var indexCmd = &cobra.Command{
 
 		// Index Cursor
 		cursorPath := filepath.Join(home, "Library", "Application Support", "Cursor", "User", "workspaceStorage")
-		if pathExists(cursorPath) {
+		if pathExists(cursorPath) && shouldIndex("cursor") {
 			sessions, messages := indexCursor(cursorPath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -167,6 +174,9 @@ var indexCmd = &cobra.Command{
 		}
 
 		for _, ext := range clineExtensions {
+			if !shouldIndex(ext.ToolName) {
+				continue
+			}
 			extSessions := 0
 			extMessages := 0
 			for _, ide := range vscodeIDEs {
@@ -185,25 +195,27 @@ var indexCmd = &cobra.Command{
 		}
 
 		// Index Crush CLI - main directory
-		crushPath := filepath.Join(home, ".crush", "crush.db")
-		crushSessions := 0
-		crushMessages := 0
-		if pathExists(crushPath) {
-			s, m := indexCrush(crushPath)
-			crushSessions += s
-			crushMessages += m
-		}
+		if shouldIndex("crush") {
+			crushPath := filepath.Join(home, ".crush", "crush.db")
+			crushSessions := 0
+			crushMessages := 0
+			if pathExists(crushPath) {
+				s, m := indexCrush(crushPath)
+				crushSessions += s
+				crushMessages += m
+			}
 
-		crushSessions, crushMessages = scanCrushPerProject(home, crushSessions, crushMessages)
-		if crushSessions > 0 {
-			totalSessions += crushSessions
-			totalMessages += crushMessages
-			fmt.Printf("  ✓ Crush: %d sessions, %d messages\n", crushSessions, crushMessages)
+			crushSessions, crushMessages = scanCrushPerProject(home, crushSessions, crushMessages)
+			if crushSessions > 0 {
+				totalSessions += crushSessions
+				totalMessages += crushMessages
+				fmt.Printf("  ✓ Crush: %d sessions, %d messages\n", crushSessions, crushMessages)
+			}
 		}
 
 		// Index Antigravity (code_tracker JSONL files in ~/.gemini/antigravity/)
 		antigravityPath := filepath.Join(home, ".gemini", "antigravity", "code_tracker", "active")
-		if pathExists(antigravityPath) {
+		if pathExists(antigravityPath) && shouldIndex("antigravity") {
 			sessions, messages := indexAntigravityCodeTracker(antigravityPath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -212,7 +224,7 @@ var indexCmd = &cobra.Command{
 
 		// Index Kiro (stores JSON files in globalStorage/kiro.kiroagent/workspace-sessions/)
 		kiroPath := filepath.Join(home, "Library", "Application Support", "Kiro", "User", "globalStorage", "kiro.kiroagent", "workspace-sessions")
-		if pathExists(kiroPath) {
+		if pathExists(kiroPath) && shouldIndex("kiro") {
 			sessions, messages := indexKiro(kiroPath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -221,7 +233,7 @@ var indexCmd = &cobra.Command{
 
 		// Index Amp CLI
 		ampPath := filepath.Join(home, ".local", "share", "amp")
-		if pathExists(ampPath) {
+		if pathExists(ampPath) && shouldIndex("amp") {
 			sessions, messages := indexAmp(ampPath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -230,7 +242,7 @@ var indexCmd = &cobra.Command{
 
 		// Index Codex CLI
 		codexPath := filepath.Join(home, ".codex")
-		if pathExists(codexPath) {
+		if pathExists(codexPath) && shouldIndex("codex") {
 			sessions, messages := indexCodex(codexPath)
 			totalSessions += sessions
 			totalMessages += messages
@@ -901,12 +913,24 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 		return 0, 0
 	}
 
+	sessionMeta := findOpenCodeSessionMeta(storagePath, sessionID)
+
 	projectName := ""
+	var sessionWorkingDir string
+	var cliVersion string
+	if sessionMeta != nil {
+		if sessionMeta.Directory != "" {
+			projectName = filepath.Base(sessionMeta.Directory)
+			sessionWorkingDir = sessionMeta.Directory
+		}
+		cliVersion = sessionMeta.Version
+	}
+
 	var firstUserMsg string
 	var sessionModel, sessionProvider string
-	var sessionWorkingDir string
+	var sessionAgent string
 	var sessionStartTime, sessionEndTime time.Time
-	var totalInputTokens, totalOutputTokens, totalCacheRead, totalCacheWrite int
+	var totalInputTokens, totalOutputTokens, totalCacheRead, totalCacheWrite, totalReasoningTokens int
 	var totalCostUSD float64
 	msgCount := 0
 
@@ -1006,10 +1030,27 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			costUSD = v
 		}
 
+		// Extract agent/mode field
+		var msgAgent string
+		if agent, ok := msg["agent"].(string); ok && agent != "" {
+			msgAgent = agent
+		} else if mode, ok := msg["mode"].(string); ok && mode != "" {
+			msgAgent = mode
+		}
+
+		// Track session agent (use first non-empty agent found)
+		if sessionAgent == "" && msgAgent != "" {
+			sessionAgent = msgAgent
+		}
+
+		// Format date as YYYY-MM-DD
+		msgDate := msgTimestamp.Format("2006-01-02")
+
 		totalInputTokens += inputTokens
 		totalOutputTokens += outputTokens
 		totalCacheRead += cacheRead
 		totalCacheWrite += cacheWrite
+		totalReasoningTokens += reasoning
 		totalCostUSD += costUSD
 
 		if sessionStartTime.IsZero() || msgTimestamp.Before(sessionStartTime) {
@@ -1038,7 +1079,10 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			OutputTokens:     outputTokens,
 			CacheReadTokens:  cacheRead,
 			CacheWriteTokens: cacheWrite,
+			ReasoningTokens:  reasoning,
 			CostUSD:          costUSD,
+			Agent:            msgAgent,
+			Date:             msgDate,
 		})
 	}
 
@@ -1046,23 +1090,38 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 		if projectName == "" {
 			projectName = "opencode"
 		}
+
+		sessionQuery := firstUserMsg
+		if sessionQuery == "" && sessionMeta != nil && sessionMeta.Title != "" {
+			sessionQuery = sessionMeta.Title
+		}
+
 		sessionPath := filepath.Join(storagePath, "session")
+		sessionDate := ""
+		if !sessionStartTime.IsZero() {
+			sessionDate = sessionStartTime.Format("2006-01-02")
+		}
 		_ = db.InsertSession(db.Session{
-			ID:                sessionID,
-			Project:           projectName,
-			FirstQuery:        firstUserMsg,
-			MessageCount:      msgCount,
-			Tool:              "opencode",
-			FilePath:          sessionPath,
-			Model:             sessionModel,
-			Provider:          sessionProvider,
-			TotalInputTokens:  totalInputTokens,
-			TotalOutputTokens: totalOutputTokens,
-			TotalCacheRead:    totalCacheRead,
-			TotalCacheWrite:   totalCacheWrite,
-			TotalCostUSD:      totalCostUSD,
-			StartTime:         sessionStartTime,
-			EndTime:           sessionEndTime,
+			ID:                   sessionID,
+			Project:              projectName,
+			FirstQuery:           sessionQuery,
+			MessageCount:         msgCount,
+			Tool:                 "opencode",
+			FilePath:             sessionPath,
+			Model:                sessionModel,
+			Provider:             sessionProvider,
+			TotalInputTokens:     totalInputTokens,
+			TotalOutputTokens:    totalOutputTokens,
+			TotalCacheRead:       totalCacheRead,
+			TotalCacheWrite:      totalCacheWrite,
+			TotalReasoningTokens: totalReasoningTokens,
+			TotalCostUSD:         totalCostUSD,
+			CLIVersion:           cliVersion,
+			WorkingDirectory:     sessionWorkingDir,
+			StartTime:            sessionStartTime,
+			EndTime:              sessionEndTime,
+			Agent:                sessionAgent,
+			Date:                 sessionDate,
 		})
 		return 1, msgCount
 	}
