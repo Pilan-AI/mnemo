@@ -901,9 +901,10 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 		return 0, 0
 	}
 
-	projectName := "opencode"
+	projectName := ""
 	var firstUserMsg string
 	var sessionModel, sessionProvider string
+	var sessionWorkingDir string
 	var sessionStartTime, sessionEndTime time.Time
 	var totalInputTokens, totalOutputTokens, totalCacheRead, totalCacheWrite int
 	var totalCostUSD float64
@@ -954,6 +955,18 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 		}
 		if sessionProvider == "" && provider != "" {
 			sessionProvider = provider
+		}
+
+		if sessionWorkingDir == "" {
+			if pathMap, ok := msg["path"].(map[string]interface{}); ok {
+				if cwd, ok := pathMap["cwd"].(string); ok && cwd != "" {
+					sessionWorkingDir = cwd
+					projectName = filepath.Base(cwd)
+				} else if root, ok := pathMap["root"].(string); ok && root != "" {
+					sessionWorkingDir = root
+					projectName = filepath.Base(root)
+				}
+			}
 		}
 
 		var msgTimestamp time.Time
@@ -1008,8 +1021,8 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 
 		msgCount++
 
-		if role == "user" && firstUserMsg == "" {
-			firstUserMsg = truncate(content, 200)
+		if role == "user" && firstUserMsg == "" && !isSystemDirective(content) {
+			firstUserMsg = truncate(sanitizeContent(content), 200)
 		}
 
 		_ = db.InsertMessage(db.Message{
@@ -1030,6 +1043,9 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 	}
 
 	if msgCount > 0 {
+		if projectName == "" {
+			projectName = "opencode"
+		}
 		sessionPath := filepath.Join(storagePath, "session")
 		_ = db.InsertSession(db.Session{
 			ID:                sessionID,
