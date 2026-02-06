@@ -928,7 +928,6 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 
 	var firstUserMsg string
 	var sessionModel, sessionProvider string
-	var sessionAgent string
 	var sessionStartTime, sessionEndTime time.Time
 	var totalInputTokens, totalOutputTokens, totalCacheRead, totalCacheWrite, totalReasoningTokens int
 	var totalCostUSD float64
@@ -1030,20 +1029,6 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			costUSD = v
 		}
 
-		// Extract agent/mode field
-		var msgAgent string
-		if agent, ok := msg["agent"].(string); ok && agent != "" {
-			msgAgent = agent
-		} else if mode, ok := msg["mode"].(string); ok && mode != "" {
-			msgAgent = mode
-		}
-
-		// Track session agent (use first non-empty agent found)
-		if sessionAgent == "" && msgAgent != "" {
-			sessionAgent = msgAgent
-		}
-
-		// Format date as YYYY-MM-DD
 		msgDate := msgTimestamp.Format("2006-01-02")
 
 		totalInputTokens += inputTokens
@@ -1081,7 +1066,6 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			CacheWriteTokens: cacheWrite,
 			ReasoningTokens:  reasoning,
 			CostUSD:          costUSD,
-			Agent:            msgAgent,
 			Date:             msgDate,
 		})
 	}
@@ -1120,7 +1104,6 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			WorkingDirectory:     sessionWorkingDir,
 			StartTime:            sessionStartTime,
 			EndTime:              sessionEndTime,
-			Agent:                sessionAgent,
 			Date:                 sessionDate,
 		})
 		return 1, msgCount
