@@ -1,5 +1,10 @@
 package cmd
 
+// add.go indexes arbitrary documentation, notes, or code files as searchable
+// knowledge sources. Unlike "mnemo index" which reads AI session history,
+// "mnemo add" treats each file as a single "document" message, making
+// project docs and personal notes searchable alongside session history.
+
 import (
 	"fmt"
 	"io"

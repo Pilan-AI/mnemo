@@ -1,12 +1,15 @@
+// Package tui provides the terminal UI components for mnemo using Bubble Tea
+// and Lip Gloss. It includes the first-run onboarding experience and the
+// interactive project selector.
 package tui
 
 import "github.com/charmbracelet/lipgloss"
 
 // =============================================================================
-// UMBRA / MNEMO BRAND COLORS
+// MNEMO BRAND COLORS
 // =============================================================================
-// Deep space theme with memory/neural network accent colors
-// "Your AI coding memory, searchable forever"
+// Deep space theme with cyan accent spectrum.
+// Designed for dark terminal backgrounds.
 
 var (
 	// Background gradient simulation (dark to darker)
@@ -15,11 +18,11 @@ var (
 	Overlay   = lipgloss.Color("#1a1a2e") // Cards, panels
 	Highlight = lipgloss.Color("#242438") // Hover states
 
-	// UMBRA Brand Colors
-	Primary   = lipgloss.Color("#a855f7") // Purple - memory/neural
-	Secondary = lipgloss.Color("#6366f1") // Indigo - depth
-	Accent    = lipgloss.Color("#22d3ee") // Cyan - active/connected
-	Warm      = lipgloss.Color("#f472b6") // Pink - discoveries
+	// MNEMO Brand Colors (Cyan Spectrum)
+	Primary   = lipgloss.Color("#00D9FF") // Cyan Bright - brand
+	Secondary = lipgloss.Color("#0A99B5") // Cyan Mid - depth
+	Accent    = lipgloss.Color("#2DD4BF") // Aqua - active/connected
+	Warm      = lipgloss.Color("#2DD4BF") // Aqua - discoveries
 
 	// Text hierarchy
 	TextBright = lipgloss.Color("#f8fafc") // Headlines
@@ -32,10 +35,10 @@ var (
 	Warning = lipgloss.Color("#fbbf24") // Amber
 	Error   = lipgloss.Color("#f87171") // Red
 
-	// Gradient stops for simulated gradients
-	GradientStart = lipgloss.Color("#a855f7") // Purple
-	GradientMid   = lipgloss.Color("#6366f1") // Indigo
-	GradientEnd   = lipgloss.Color("#22d3ee") // Cyan
+	// Gradient stops for simulated gradients (Cyan spectrum)
+	GradientStart = lipgloss.Color("#00D9FF") // Cyan Bright
+	GradientMid   = lipgloss.Color("#0A99B5") // Cyan Mid
+	GradientEnd   = lipgloss.Color("#0D3D50") // Cyan Deep
 )
 
 // =============================================================================
@@ -122,21 +125,17 @@ var (
 // =============================================================================
 
 // Large ASCII banner with gradient-like coloring
-const BannerWidth = 58
+const BannerWidth = 21
 
 func RenderBanner() string {
-	// Each line will be colored differently to simulate gradient
 	lines := []struct {
 		text  string
 		color lipgloss.Color
 	}{
 		{"", Primary},
-		{"  ███╗   ███╗███╗   ██╗███████╗███╗   ███╗ ██████╗ ", Primary},
-		{"  ████╗ ████║████╗  ██║██╔════╝████╗ ████║██╔═══██╗", lipgloss.Color("#9333ea")},
-		{"  ██╔████╔██║██╔██╗ ██║█████╗  ██╔████╔██║██║   ██║", lipgloss.Color("#7c3aed")},
-		{"  ██║╚██╔╝██║██║╚██╗██║██╔══╝  ██║╚██╔╝██║██║   ██║", Secondary},
-		{"  ██║ ╚═╝ ██║██║ ╚████║███████╗██║ ╚═╝ ██║╚██████╔╝", lipgloss.Color("#4f46e5")},
-		{"  ╚═╝     ╚═╝╚═╝  ╚═══╝╚══════╝╚═╝     ╚═╝ ╚═════╝ ", Accent},
+		{"  ┏┳┓ ┏┓╻ ┏━╸ ┏┳┓ ┏━┓", Primary},
+		{"  ┃┃┃ ┃┗┫ ┣╸  ┃┃┃ ┃ ┃", Secondary},
+		{"  ╹ ╹ ╹ ╹ ┗━╸ ╹ ╹ ┗━┛", Accent},
 		{"", Accent},
 	}
 
@@ -148,17 +147,17 @@ func RenderBanner() string {
 	return result
 }
 
-// Decorative line with gradient effect
+// Decorative line with cyan gradient effect
 func RenderGradientLine(width int) string {
 	chars := []struct {
 		char  string
 		color lipgloss.Color
 	}{
 		{"━", Primary},
-		{"━", lipgloss.Color("#9333ea")},
-		{"━", lipgloss.Color("#7c3aed")},
+		{"━", lipgloss.Color("#00C4E6")},
+		{"━", lipgloss.Color("#0A99B5")},
 		{"━", Secondary},
-		{"━", lipgloss.Color("#4f46e5")},
+		{"━", lipgloss.Color("#087A8F")},
 		{"━", Accent},
 	}
 
@@ -202,10 +201,10 @@ const (
 
 // Decorative characters
 const (
-	Sparkle   = "✨"
-	Brain     = "🧠"
-	Rocket    = "🚀"
-	Lightning = "⚡"
+	Sparkle   = "✦"
+	Brain     = "◈"
+	Rocket    = "▸"
+	Lightning = "↯"
 	Star      = "★"
 	Diamond   = "◆"
 	Arrow     = "→"

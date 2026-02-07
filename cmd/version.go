@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Build-time variables, overridden via -ldflags during goreleaser builds.
 var (
 	Version   = "1.0.0"
 	BuildDate = "2026-01-26"

@@ -1,10 +1,14 @@
-//go:build ignore
-
+// Package proxy provides an HTTP proxy that sits between AI coding tools and
+// the Claude API. It intercepts requests to inject relevant project context
+// from mnemo's search index into the system prompt, and tracks token usage
+// from responses.
+//
+// The proxy listens on a local port and forwards to the upstream Claude API,
+// adding an "X-Mnemo-Tracked" header to indicate context was injected.
 package proxy
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,12 +23,13 @@ import (
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// Server is the mnemo HTTP proxy that intercepts Claude API requests.
 type Server struct {
-	port     string
-	upstream string
-	db       *sql.DB
-	server   *http.Server
-	mu       sync.RWMutex
+	port      string
+	upstream  string
+	server    *http.Server
+	mu        sync.RWMutex
+	sessionID string
 }
 
 type ClaudeRequest struct {
@@ -42,22 +47,32 @@ type ClaudeMessage struct {
 }
 
 type ClaudeResponse struct {
-	Content string `json:"content"`
+	ID      string         `json:"id"`
+	Type    string         `json:"type"`
+	Role    string         `json:"role"`
+	Content []ContentBlock `json:"content"`
+	Model   string         `json:"model"`
+	Usage   UsageInfo      `json:"usage"`
 }
 
-type UpstreamResponse struct {
-	ClaudeResponse
-	ID   string `json:"id"`
+type ContentBlock struct {
 	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
-func NewServer(port, upstream string, db *sql.DB) *Server {
+type UsageInfo struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+// NewServer creates a proxy server that listens on port and forwards to upstream.
+func NewServer(port, upstream string) *Server {
 	return &Server{
-		port:     port,
-		upstream: upstream,
-		db:       db,
-		server:   &http.Server{},
-		mu:       sync.RWMutex{},
+		port:      port,
+		upstream:  upstream,
+		server:    &http.Server{},
+		mu:        sync.RWMutex{},
+		sessionID: fmt.Sprintf("proxy-%d", time.Now().Unix()),
 	}
 }
 
@@ -69,6 +84,7 @@ func (s *Server) Start() error {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","mnemo":"active"}`)
 	})
+	mux.HandleFunc("/stats", s.handleStats)
 
 	s.server.Handler = mux
 	s.server.Addr = s.port
@@ -99,25 +115,86 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	project, query := s.extractContext(req.Messages)
-
 	mnemoContext := s.getMnemoContext(project, query)
 
 	if mnemoContext != "" {
 		req.System = strings.TrimSpace(req.System) + "\n\n---\n## Project Memory (mnemo)\n" + mnemoContext + "\n---"
 	}
 
-	upstreamResp, err := s.forwardToUpstream(&req)
+	upstreamResp, rawBody, err := s.forwardToUpstream(&req)
 	if err != nil {
 		log.Printf("Failed to forward to upstream: %v\n", err)
 		http.Error(w, "Upstream error", http.StatusBadGateway)
 		return
 	}
 
-	corrected := s.verifyResponse(upstreamResp.Content, project, query)
+	s.trackTokenUsage(upstreamResp, req.Model)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Mnemo-Corrected", fmt.Sprintf("%v", corrected != upstreamResp.Content))
-	json.NewEncoder(w).Encode(ClaudeResponse{Content: corrected})
+	w.Header().Set("X-Mnemo-Tracked", "true")
+	w.Write(rawBody)
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := db.GetTokenStats(30)
+	if err != nil {
+		http.Error(w, "Failed to get stats", http.StatusInternalServerError)
+		return
+	}
+
+	byProvider, _ := db.GetTokenStatsByProvider(30)
+
+	response := map[string]interface{}{
+		"total":       stats,
+		"by_provider": byProvider,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) trackTokenUsage(resp *ClaudeResponse, model string) {
+	if resp == nil {
+		return
+	}
+
+	usage := db.TokenUsage{
+		SessionID:    s.sessionID,
+		Model:        model,
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
+		TotalTokens:  resp.Usage.InputTokens + resp.Usage.OutputTokens,
+		CostUSD:      calculateCost(model, resp.Usage.InputTokens, resp.Usage.OutputTokens),
+		Provider:     "anthropic",
+		Timestamp:    time.Now(),
+	}
+
+	if err := db.InsertTokenUsage(usage); err != nil {
+		log.Printf("Failed to track token usage: %v\n", err)
+	}
+}
+
+// calculateCost estimates USD cost based on Anthropic's per-token pricing.
+// Rates are hardcoded for Claude 3.x models (Opus/Sonnet/Haiku).
+func calculateCost(model string, inputTokens, outputTokens int) float64 {
+	var inputRate, outputRate float64
+
+	switch {
+	case strings.Contains(model, "opus"):
+		inputRate = 15.0 / 1_000_000
+		outputRate = 75.0 / 1_000_000
+	case strings.Contains(model, "sonnet"):
+		inputRate = 3.0 / 1_000_000
+		outputRate = 15.0 / 1_000_000
+	case strings.Contains(model, "haiku"):
+		inputRate = 0.25 / 1_000_000
+		outputRate = 1.25 / 1_000_000
+	default:
+		inputRate = 3.0 / 1_000_000
+		outputRate = 15.0 / 1_000_000
+	}
+
+	return float64(inputTokens)*inputRate + float64(outputTokens)*outputRate
 }
 
 func (s *Server) extractContext(messages []ClaudeMessage) (project, query string) {
@@ -149,7 +226,7 @@ func (s *Server) extractProject(content string) string {
 			after := content[idx+len(kw):]
 			words := strings.Fields(after)
 			if len(words) > 0 {
-				return strings.Title(words[0])
+				return strings.ToTitle(words[0])
 			}
 		}
 	}
@@ -169,6 +246,9 @@ func extractProjectFromPath(path string) string {
 	return path
 }
 
+// getMnemoContext searches mnemo for relevant past sessions and returns a
+// formatted summary to inject into the system prompt. Uses the project name
+// plus the first couple words of the user's query as the search key.
 func (s *Server) getMnemoContext(project, query string) string {
 	if project == "" && query == "" {
 		return ""
@@ -185,7 +265,7 @@ func (s *Server) getMnemoContext(project, query string) string {
 		}
 	}
 
-	results, err := mnemodb.Search(searchQuery, 5)
+	results, err := db.Search(searchQuery, 5)
 	if err != nil {
 		log.Printf("Error searching mnemo: %v\n", err)
 		return ""
@@ -208,15 +288,15 @@ func (s *Server) getMnemoContext(project, query string) string {
 	return ctx.String()
 }
 
-func (s *Server) forwardToUpstream(req *ClaudeRequest) (*UpstreamResponse, error) {
+func (s *Server) forwardToUpstream(req *ClaudeRequest) (*ClaudeResponse, []byte, error) {
 	reqBody, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	upstreamReq, err := http.NewRequest("POST", s.upstream+"/v1/messages", strings.NewReader(string(reqBody)))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	upstreamReq.Header.Set("Content-Type", "application/json")
@@ -226,76 +306,19 @@ func (s *Server) forwardToUpstream(req *ClaudeRequest) (*UpstreamResponse, error
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	var upstreamResp UpstreamResponse
-	if err := json.Unmarshal(body, &upstreamResp); err != nil {
-		return nil, err
+	var claudeResp ClaudeResponse
+	if err := json.Unmarshal(body, &claudeResp); err != nil {
+		return nil, body, nil
 	}
 
-	return &upstreamResp, nil
-}
-
-func (s *Server) verifyResponse(content, project, query string) string {
-	factChecks := []struct {
-		trigger   string
-		validator func(string) bool
-		corrector func(string) string
-	}{
-		{
-			trigger: "you previously",
-			validator: func(s string) bool {
-				return strings.Contains(s, "previously")
-			},
-			corrector: func(s string) string {
-				corrected := getFactFromMnemo(project, query)
-				if corrected != "" {
-					return strings.Replace(s, "as of", "according to mnemo data")
-				}
-				return s
-			},
-		},
-		{
-			trigger: "as of",
-			validator: func(s string) bool {
-				return strings.Contains(s, "as of ")
-			},
-			corrector: func(s string) string {
-				corrected := getFactFromMnemo(project, query)
-				if corrected != "" {
-					return strings.Replace(s, "as of", "according to mnemo data")
-				}
-				return s
-			},
-		},
-	}
-
-	corrected := content
-	for _, check := range factChecks {
-		if check.validator(corrected) {
-			corrected = check.corrector(corrected)
-		}
-	}
-
-	if corrected != content {
-		log.Printf("Corrected hallucination in response (project: %s)\n", project)
-	}
-
-	return corrected
-}
-
-func getFactFromMnemo(project, query string) string {
-	results, err := db.Search([]string{project}, 1)
-	if err != nil || len(results) == 0 {
-		return ""
-	}
-
-	return fmt.Sprintf("[mnemo data: %s]", results[0].Snippet)
+	return &claudeResp, body, nil
 }
