@@ -7,9 +7,14 @@ mnemo
 
 # Test binary, built with `go test -c`
 *.test
+*_test
 
 # Output of the go coverage tool
 *.out
+coverage.html
+
+# Backup files
+*.backup
 
 # Go workspace file
 go.work

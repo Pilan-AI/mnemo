@@ -2,14 +2,14 @@
 
 # Required parameters:
 # @raycast.schemaVersion 1
-# @raycast.mode silent
+# @raycast.mode fullOutput
 
 # Optional parameters:
 # @raycast.icon 🔍
 # @raycast.packageName Mnemo
 # @raycast.title Mnemo: Search
 # @raycast.description Search past AI sessions and knowledge
-# @raycast.author Mnemo
+# @raycast.author 0xraghu
 # @raycast.authorURL https://github.com/Pilan-AI/mnemo
 
 # Documentation:
@@ -17,12 +17,11 @@
 
 QUERY="$1"
 
-if [ -n "$QUERY" ]; then
+if [ -z "$QUERY" ]; then
     echo "Usage: mnemo-search <query>"
     exit 1
 fi
 
-# Run mnemo search
-/opt/homebrew/bin/mnemo search "$QUERY" 2>&1
+mnemo search "$QUERY" 2>&1
 
 exit 0

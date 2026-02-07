@@ -1,0 +1,53 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: mnemo
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/Pilan-AI/mnemo/cmd.Version={{.Version}}
+      - -X github.com/Pilan-AI/mnemo/cmd.BuildDate={{.Date}}
+      - -X github.com/Pilan-AI/mnemo/cmd.GitCommit={{.ShortCommit}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+brews:
+  - repository:
+      owner: Pilan-AI
+      name: homebrew-tap
+    homepage: "https://github.com/Pilan-AI/mnemo"
+    description: "Memory for AI-assisted development. Search your AI coding sessions."
+    license: "MIT"
+    install: |
+      bin.install "mnemo"
+    test: |
+      system "#{bin}/mnemo", "version"

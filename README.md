@@ -1,161 +1,216 @@
-<div align="center">
-
 # mnemo
 
-### Memory for AI-assisted development
+**Instant local search and indexing across all your AI coding sessions.**
 
-> **Intelligence Crystallized!**
->
-> எண்ணென்ப ஏனை எழுத்தென்ப இவ்விரண்டும்
-> கண்ணென்ப வாழும் உயிர்க்கு.
->
-> *(Numbers and Letters are the two eyes for the living)*
->
-> — Thiruvalluvar, Thirukkural
+I'm an average Claude Code and OpenCode user. When I ran the numbers, I had 89,037 messages sitting across my AI coding tools. While organizing those chats, I realized they weren't just conversations — they were my 'decision journals'. Why I picked one architecture over another, how I debugged that weird race condition at 2am, what trade-offs I accepted and why. All of it scattered across 12 different tools in 5 different formats.
 
-<br>
-
-**Index your past to build your future.**
-
-</div>
-
----
+So I built mnemo. It indexes everything into one local SQLite database and gives you full-text search across all of it. No cloud, no accounts, everything stays on your machine.
 
 ## Install
 
 ```bash
 # macOS / Linux
-brew install mnemo
+brew install Pilan-AI/tap/mnemo
 
-# Or build from source
+# From source
 go install github.com/Pilan-AI/mnemo@latest
 ```
 
-## What is this?
-
-Your AI coding sessions — **indexed, searchable, never forgotten**.
+## Quick start
 
 ```bash
-# See what AI tools you have
-$ mnemo tools
-  ✓ Claude Code     ~/.claude/projects
-  ✓ Cursor          ~/.cursor
-  ✓ Gemini CLI      ~/.gemini
-  ...
-  Detected: 6/12+ tools
-
-# Index all your conversations
-$ mnemo index
-  ✓ Claude Code: 662 sessions, 89054 messages
-  Total: 662 sessions, 89054 messages indexed
+# First run — interactive onboarding that finds your tools
+mnemo index
 
 # Search across everything
-$ mnemo search "authentication flow"
-  Found 23 results:
-  [1] my-saas-project (420 messages)
-      Query: Help me implement OAuth2...
+mnemo search "authentication flow"
 
-# See recent work
-$ mnemo recent --days=7
+# See what you've been working on
+mnemo recent --days=7
 
-# Generate context for a new session
-$ mnemo context my-project > CONTEXT.md
+# Load context into a new session
+mnemo context my-project
 ```
 
-## Supported Tools
+That's it. `mnemo index` auto-detects your installed tools, parses their native formats, and builds the search index. Subsequent runs are incremental.
 
-Works with **any** AI coding assistant:
+## Supported tools
 
-| Tool | Status | Format |
-|------|--------|--------|
-| Claude Code | ✅ Full support | JSONL |
-| Opencode | ✅ Full support | JSONL |
-| Cursor | 🔄 Coming soon | SQLite |
-| Gemini CLI | 🔄 Coming soon | JSON |
-| Windsurf | 🔄 Coming soon | JSON |
-| Aider | 🔄 Coming soon | Markdown |
-| GitHub Copilot | 🔄 Coming soon | JSON |
-| Roo Code | 🔄 Coming soon | JSON |
-| Kilo Code | 🔄 Coming soon | JSON |
-| Amp | 🔄 Coming soon | JSON |
-| Cline | 🔄 Coming soon | JSON |
+mnemo reads the native storage format of each tool directly. No exports, no copy-paste, no API keys.
 
----
+| Tool | Format | What it reads |
+|------|--------|---------------|
+| Claude Code | JSONL | `~/.claude/projects/`, transcripts, XDG paths |
+| OpenCode | JSON | `~/.local/share/opencode/` message + session dirs |
+| Gemini CLI | JSON | `~/.gemini/sessions/` + new tmp/chats format |
+| Cursor | SQLite | globalStorage `state.vscdb` composer data |
+| Crush | SQLite | `~/.crush/crush.db` + per-project databases |
+| Codex | JSONL | `~/.codex/sessions/` + archived sessions |
+| Amp | JSON | `~/.local/share/amp/threads/` with usage ledger |
+| Kiro | JSON | globalStorage workspace-sessions |
+| Antigravity | JSONL | `~/.gemini/antigravity/code_tracker/` |
+| Kilo Code | JSON | VS Code extension `tasks/ui_messages.json` |
+| Cline | JSON | VS Code extension `tasks/ui_messages.json` |
+| Roo Code | JSON | VS Code extension `tasks/ui_messages.json` |
 
-## Why mnemo?
+Windsurf, Aider, and GitHub Copilot support coming soon.
 
-Every developer using AI assistants has this problem:
+## Plugins
 
-> "I built something similar last week... what did I do?"
->
-> "What was that command Claude gave me for Kubernetes?"
->
-> "I had this exact conversation before, where is it?"
+If you use Claude Code or OpenCode, the plugins give you a much deeper integration than raw MCP. Your AI assistant gets access to your past sessions as context — it remembers what you discussed last week.
 
-Your AI conversations are **gold** — full of solved problems, working code, architectural decisions. But they're scattered across tools, buried in log files, impossible to search.
+### Claude Code plugin
 
-**mnemo fixes this.**
+```bash
+mnemo install claude-code
+```
 
-One index. All tools. Instant search.
+This installs the [mnemo-memory plugin](https://github.com/Pilan-AI/pilan-plugins) which gives you:
 
----
+- **Auto-context** — past session context loads automatically when you start working
+- `/mnemo-memory:remember <query>` — search past sessions from inside Claude Code
+- `/mnemo-memory:recall` — load full project memory into your current session
+- **Memory agent** — a specialized subagent for deep context retrieval across projects
 
-<div align="center">
+### OpenCode plugin
 
-## The Story Behind mnemo
+```bash
+mnemo install opencode
+```
 
-**Built in 21 days. Total cost: $420.**
+Adds mnemo as an MCP tool inside OpenCode. Search and context commands available directly in your coding session.
 
-</div>
+## MCP server
 
-I'm **Raghu** — find me at `@Pilan_AI` on GitHub and X.
+For Claude Desktop, Cursor, and other MCP-compatible clients:
 
-Every developer using AI assistants faces the same problem: valuable conversations scattered across tools, impossible to search, lost to time. After months of watching myself and others repeatedly solve the same problems because we couldn't find our past solutions, I built mnemo.
+```bash
+mnemo serve
+```
 
-The philosophy is simple: **your AI conversations are knowledge artifacts that deserve to be searchable, reusable, and permanent.**
+Exposes four tools: `mnemo_search`, `mnemo_context`, `mnemo_recent`, `mnemo_tools`.
 
-mnemo exists because:
+```bash
+# Or install the MCP config directly
+mnemo install mcp
+```
 
-- **Memory matters** — Every solved problem, every working solution, every architectural decision in your AI conversations is valuable
-- **Search is power** — Being able to instantly find "how did I solve X last month?" transforms how you work
-- **Tools should unite, not divide** — Your knowledge shouldn't be fragmented across different AI assistants
+## Commands
 
-I built mnemo in 21 days because I needed it yesterday. The $420 cost proves that focused execution beats endless planning.
+| Command | What it does |
+|---------|-------------|
+| `mnemo index` | Index all detected AI tool sessions |
+| `mnemo search <query>` | Full-text search with BM25 ranking |
+| `mnemo recent` | Show recent sessions (default: 7 days) |
+| `mnemo context <project>` | Generate project context summary |
+| `mnemo tools` | List detected AI tools and session counts |
+| `mnemo blocks` | Show 5-hour usage blocks with token burn rates |
+| `mnemo projects` | Manage tracked project directories |
+| `mnemo serve` | Start MCP server |
+| `mnemo install` | Install plugins and MCP config |
+| `mnemo add <path>` | Index a custom path |
 
-If you're tired of re-solving problems you've already solved, mnemo is for you.
+## How it works
 
----
+```
+┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+│ Claude Code │ │  OpenCode   │ │ Gemini CLI  │ │   Cursor    │  + 8 more
+│   (JSONL)   │ │   (JSON)    │ │   (JSON)    │ │  (SQLite)   │
+└──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+       │               │               │               │
+       └───────────────┴───────┬───────┴───────────────┘
+                               │
+                               ▼
+                  ┌────────────────────────┐
+                  │      mnemo index       │
+                  │                        │
+                  │  auto-detect tools     │
+                  │  parse native formats  │
+                  │  normalize + dedupe    │
+                  └───────────┬────────────┘
+                              │
+                              ▼
+                  ┌────────────────────────┐
+                  │   ~/.mnemo/mnemo.db    │
+                  │                        │
+                  │  SQLite + FTS5 index   │
+                  │  sessions · messages   │
+                  │  projects · tokens     │
+                  └──┬────┬────┬─────┬─────┘
+                     │    │    │     │
+                     ▼    ▼    ▼     ▼
+                  search  ·  context · recent · serve
+                  (BM25)    (project)  (days)   (MCP)
+                     │    │    │     │
+                     ▼    ▼    ▼     ▼
+                  ┌────────────────────────┐
+                  │  Claude Code plugin    │
+                  │  OpenCode plugin       │
+                  │  MCP clients (Cursor,  │
+                  │  Claude Desktop, etc.) │
+                  └────────────────────────┘
+```
+
+1. `mnemo index` scans each tool's native storage (JSONL, SQLite, JSON)
+2. Messages are normalized into `~/.mnemo/mnemo.db` — a single SQLite file with FTS5 full-text search
+3. `mnemo search` runs BM25-ranked queries across all indexed content
+4. Results return matched snippets with project name, tool, model, and session context
+
+The database is a single file. Back it up, move it between machines, query it with any SQLite client.
+
+## Platform support
+
+- **macOS** (Apple Silicon + Intel)
+- **Linux** (arm64 + amd64)
+- **Windows** (amd64)
+
+Built with pure-Go SQLite ([modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)) — no CGO, no system dependencies. Single binary, runs anywhere.
+
+## Why not grep?
+
+grep searches text. mnemo searches **sessions**.
+
+- grep can't parse 12 different formats (JSONL, SQLite, JSON) into meaningful conversations
+- grep doesn't rank results by relevance (mnemo uses BM25)
+- grep doesn't know that a Claude Code JSONL file and a Cursor SQLite database contain the same kind of data
+- grep gives you matching lines; mnemo gives you snippets with project, tool, and session context
+
+If you use one tool and remember exact strings, grep works. If you use multiple tools and want to find "that auth discussion from last week," you need mnemo.
+
+## What's next
+
+mnemo is the first tool from [Pilan](https://pilan.ai). Later this month, we're launching a native macOS app that sits on top of mnemo — knowledge graph, pattern recognition, session intelligence. If mnemo is the memory, Pilan is the brain.
 
 ## Uninstall
 
 ```bash
-# If installed via Homebrew
 brew uninstall mnemo
+# or: rm $(which mnemo)
 
-# If installed via Go
-rm $(which mnemo)
-
-# Remove all indexed data (optional)
+# Remove indexed data (optional)
 rm -rf ~/.mnemo
 ```
 
----
-
 ## License
 
-mnemo is dual-licensed:
+MIT. See [LICENSE](./LICENSE).
 
-- **AGPL v3** — Free for open source and personal use
-- **Commercial License** — For proprietary/enterprise use
+---
 
-See [LICENSE](./LICENSE) for details.
+[GitHub](https://github.com/Pilan-AI/mnemo) · [X](https://x.com/Pilan_AI) · [Pilan](https://pilan.ai)
+
+Built by [@0xraghu](https://x.com/Pilan_AI)
 
 ---
 
 <div align="center">
 
-**[GitHub](https://github.com/Pilan-AI/mnemo)** · **[X](https://x.com/Pilan_AI)**
+*எண்ணென்ப ஏனை எழுத்தென்ப — இவ்விரண்டும்*
+*கண்ணென்ப வாழும் உயிர்க்கு.*
 
-*Memory indexed. Knowledge unlocked.*
+Numbers and letters — these two
+are the eyes of all who live.
+
+— Thiruvalluvar, Tirukkural 392
 
 </div>

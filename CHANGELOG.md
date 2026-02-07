@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned for v1.2.0
+
+#### Search Improvements (OpenClaw Learnings)
+- **Hybrid Search**: Combine FTS5 with vector similarity (`finalScore = 0.7 * vectorScore + 0.3 * bm25Score`)
+- **Embedding Cache**: Cache chunk embeddings in SQLite, skip re-embedding unchanged content
+- **Schema Versioning**: Add `schema_version` field for forward compatibility
+
+#### Export & Backup
+- **Markdown Export**: `mnemo export --format markdown` for Git-friendly backups
+- **Thinking Content**: Extract and store `thinking` blocks separately for reasoning analysis
+
+#### Curated Layer
+- **MEMORY.md equivalent**: Distilled insights from conversations (manual curation support)
+
+---
+
 ## [1.1.0] - 2026-01-29
 
 ### Added
