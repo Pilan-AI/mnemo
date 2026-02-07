@@ -1,19 +1,39 @@
 package cmd
 
+// index.go is the core indexing engine. It detects installed AI tools,
+// reads their native session formats, and normalizes everything into
+// the unified mnemo schema (sessions + messages + FTS5).
+//
+// Supported tools and their storage formats:
+//
+//   Claude Code     — ~/.claude/projects/**/*/   JSONL (one file per session)
+//   OpenCode        — ~/.local/share/opencode/   JSON  (message/ + session/ dirs)
+//   Gemini CLI      — ~/.gemini/sessions/         JSON  (one file per session)
+//   Cursor          — ~/Library/.../Cursor/       SQLite (state.vscdb)
+//   Crush           — ~/.crush/crush.db           SQLite (conversations table)
+//   Aider           — ~/.aider.chat.history.md    Markdown (single file)
+//   Codex           — ~/.codex/                   JSONL
+//   Amp             — ~/.local/share/amp/         JSONL
+//   Antigravity     — ~/Library/.../Antigravity/  JSONL (state.vscdb)
+//   Kiro            — ~/Library/.../Kiro/         SQLite (state.vscdb)
+//   Cline/Roo/Kilo  — VS Code extensions          JSON  (tasks/ directory)
+//
+// The first run triggers the interactive onboarding TUI instead of
+// a bare index operation.
+
 import (
 	"bufio"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Pilan-AI/mnemo/internal/db"
-	"github.com/Pilan-AI/mnemo/internal/tui"
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 )
 
@@ -32,17 +52,9 @@ var indexCmd = &cobra.Command{
 	Long:  "Scan and index conversation history from all detected AI coding tools.",
 	Run: func(cmd *cobra.Command, args []string) {
 		home, _ := os.UserHomeDir()
-		dbPath := filepath.Join(home, ".mnemo", "mnemo.db")
 
-		isFirstRun := !pathExists(dbPath)
-
-		if isFirstRun && !indexForce {
-			runOnboarding()
-			return
-		}
-
-		// Normal re-index flow
-		fmt.Println("Re-indexing AI tool conversations...")
+		// Normal index/re-index flow
+		fmt.Println("Indexing AI tool conversations...")
 		fmt.Println()
 
 		// Initialize SQLite database
@@ -153,10 +165,10 @@ var indexCmd = &cobra.Command{
 			fmt.Printf("  ✓ Gemini CLI: %d sessions, %d messages\n", sessions, messages)
 		}
 
-		// Index Cursor
-		cursorPath := filepath.Join(home, "Library", "Application Support", "Cursor", "User", "workspaceStorage")
-		if pathExists(cursorPath) && shouldIndex("cursor") {
-			sessions, messages := indexCursor(cursorPath)
+		// Index Cursor (new globalStorage format)
+		cursorGlobalPath := filepath.Join(appSupportDir(home, "Cursor"), "User", "globalStorage", "state.vscdb")
+		if pathExists(cursorGlobalPath) && shouldIndex("cursor") {
+			sessions, messages := indexCursorGlobalStorage(cursorGlobalPath)
 			totalSessions += sessions
 			totalMessages += messages
 			fmt.Printf("  ✓ Cursor: %d sessions, %d messages\n", sessions, messages)
@@ -180,7 +192,7 @@ var indexCmd = &cobra.Command{
 			extSessions := 0
 			extMessages := 0
 			for _, ide := range vscodeIDEs {
-				tasksPath := filepath.Join(home, "Library", "Application Support", ide, "User", "globalStorage", ext.ExtID, "tasks")
+				tasksPath := vscodeExtTasksPath(home, ide, ext.ExtID)
 				if pathExists(tasksPath) {
 					s, m := indexClineFamily(tasksPath, ext.ToolName)
 					extSessions += s
@@ -223,7 +235,7 @@ var indexCmd = &cobra.Command{
 		}
 
 		// Index Kiro (stores JSON files in globalStorage/kiro.kiroagent/workspace-sessions/)
-		kiroPath := filepath.Join(home, "Library", "Application Support", "Kiro", "User", "globalStorage", "kiro.kiroagent", "workspace-sessions")
+		kiroPath := filepath.Join(appSupportDir(home, "Kiro"), "User", "globalStorage", "kiro.kiroagent", "workspace-sessions")
 		if pathExists(kiroPath) && shouldIndex("kiro") {
 			sessions, messages := indexKiro(kiroPath)
 			totalSessions += sessions
@@ -281,1848 +293,399 @@ var indexCmd = &cobra.Command{
 
 		fmt.Println()
 		fmt.Println("Run 'mnemo search <query>' to search your history.")
+
+		// Clean up .indexing status file (background index complete)
+		mnemoDir := filepath.Join(home, ".mnemo")
+		_ = os.Remove(filepath.Join(mnemoDir, ".indexing"))
 	},
 }
 
-func indexClaudeCode(basePath string) (int, int) {
-	sessions := 0
-	messages := 0
-
-	// Recursively walk through all directories to find .jsonl files
-	_ = filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip errors, continue walking
-		}
-
-		// Skip directories, only process .jsonl files
-		if info.IsDir() {
-			return nil
-		}
-
-		if strings.HasSuffix(info.Name(), ".jsonl") {
-			s, m := indexJSONLSession(path, "claude")
-			sessions += s
-			messages += m
-		}
-
-		return nil
-	})
-
-	return sessions, messages
-}
-
-func indexGeminiCLI(sessionsPath string) (int, int) {
-	sessionFiles, err := os.ReadDir(sessionsPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, sessionFile := range sessionFiles {
-		if sessionFile.IsDir() || !strings.HasSuffix(sessionFile.Name(), ".json") {
-			continue
-		}
-
-		sessionFilePath := filepath.Join(sessionsPath, sessionFile.Name())
-		s, m := indexGeminiSession(sessionFilePath)
-		totalSessions += s
-		totalMessages += m
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexGeminiSession(sessionPath string) (int, int) {
-	data, err := os.ReadFile(sessionPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	var session struct {
-		ID          string `json:"id"`
-		ProjectPath string `json:"projectPath"`
-		Messages    []struct {
-			Role      string `json:"role"`
-			Content   string `json:"content"`
-			Timestamp string `json:"timestamp"`
-		} `json:"messages"`
-		CreatedAt    string `json:"createdAt"`
-		LastActivity string `json:"lastActivity"`
-	}
-
-	if err := json.Unmarshal(data, &session); err != nil {
-		return 0, 0
-	}
-
-	if len(session.Messages) == 0 {
-		return 0, 0
-	}
-
-	projectName := filepath.Base(session.ProjectPath)
-	if projectName == "" || projectName == "." {
-		projectName = "gemini"
-	}
-
-	var firstUserMsg string
-	msgCount := 0
-
-	for _, msg := range session.Messages {
-		if msg.Content == "" {
-			continue
-		}
-
-		if msg.Role == "user" && firstUserMsg == "" {
-			firstUserMsg = truncate(msg.Content, 200)
-		}
-
-		timestamp := time.Now()
-		if msg.Timestamp != "" {
-			if parsed, err := time.Parse(time.RFC3339, msg.Timestamp); err == nil {
-				timestamp = parsed
-			}
-		}
-
-		err := db.InsertMessage(db.Message{
-			SessionID: session.ID,
-			Project:   projectName,
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Timestamp: timestamp,
-			Tool:      "gemini",
-		})
-		if err != nil {
-			indexErrors++
-			continue
-		}
-		msgCount++
-	}
-
-	if msgCount > 0 {
-		_ = db.InsertSessionSimple(session.ID, projectName, firstUserMsg, sessionPath, "gemini", msgCount)
-		return 1, msgCount
-	}
-
-	return 0, 0
-}
-
-func indexCursor(workspaceStoragePath string) (int, int) {
-	workspaceDirs, err := os.ReadDir(workspaceStoragePath)
-	if err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, wsDir := range workspaceDirs {
-		if !wsDir.IsDir() {
-			continue
-		}
-
-		dbPath := filepath.Join(workspaceStoragePath, wsDir.Name(), "state.vscdb")
-		if !pathExists(dbPath) {
-			continue
-		}
-
-		s, m := indexCursorWorkspace(dbPath, wsDir.Name())
-		totalSessions += s
-		totalMessages += m
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexCursorWorkspace(dbPath, workspaceID string) (int, int) {
-	sqliteDB, err := db.OpenReadOnlySQLite(dbPath)
-	if err != nil {
-		return 0, 0
-	}
-	defer sqliteDB.Close()
-
-	var chatDataJSON string
-	row := sqliteDB.QueryRow("SELECT value FROM ItemTable WHERE key='workbench.panel.aichat.view.aichat.chatdata'")
-	if err := row.Scan(&chatDataJSON); err != nil {
-		return 0, 0
-	}
-
-	if chatDataJSON == "" {
-		return 0, 0
-	}
-
-	var chatData struct {
-		Tabs []struct {
-			TabID     string `json:"tabId"`
-			ChatTitle string `json:"chatTitle"`
-			Bubbles   []struct {
-				Type     string `json:"type"`
-				ID       string `json:"id"`
-				RawText  string `json:"rawText"`
-				Text     string `json:"text"`
-				InitText string `json:"initText"`
-				RichText string `json:"richText"`
-			} `json:"bubbles"`
-		} `json:"tabs"`
-	}
-
-	if err := json.Unmarshal([]byte(chatDataJSON), &chatData); err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, tab := range chatData.Tabs {
-		if len(tab.Bubbles) == 0 {
-			continue
-		}
-
-		sessionID := tab.TabID
-		if sessionID == "" {
-			continue
-		}
-
-		projectName := tab.ChatTitle
-		if projectName == "" {
-			projectName = "cursor"
-		}
-
-		var firstUserMsg string
-		msgCount := 0
-
-		for _, bubble := range tab.Bubbles {
-			var role, content string
-
-			if bubble.Type == "user" {
-				role = "user"
-				content = extractCursorUserContent(bubble.InitText, bubble.RichText, bubble.RawText)
-			} else if bubble.Type == "ai" {
-				role = "assistant"
-				content = bubble.Text
-				if content == "" {
-					content = bubble.RawText
-				}
-			} else {
-				continue
-			}
-
-			if content == "" {
-				continue
-			}
-
-			if role == "user" && firstUserMsg == "" {
-				firstUserMsg = truncate(content, 200)
-			}
-
-			err := db.InsertMessage(db.Message{
-				SessionID: sessionID,
-				Project:   projectName,
-				Role:      role,
-				Content:   content,
-				Timestamp: time.Now(),
-				Tool:      "cursor",
-			})
-			if err != nil {
-				indexErrors++
-				continue
-			}
-			msgCount++
-		}
-
-		if msgCount > 0 {
-			_ = db.InsertSessionSimple(sessionID, projectName, firstUserMsg, dbPath, "cursor", msgCount)
-			totalSessions++
-			totalMessages += msgCount
-		}
-	}
-
-	return totalSessions, totalMessages
-}
-
-func extractCursorUserContent(initText, richText, rawText string) string {
-	if rawText != "" {
-		return rawText
-	}
-
-	textToProcess := initText
-	if textToProcess == "" {
-		textToProcess = richText
-	}
-	if textToProcess == "" {
-		return ""
-	}
-
-	var lexical struct {
-		Root struct {
-			Children []struct {
-				Children []struct {
-					Text string `json:"text"`
-				} `json:"children"`
-			} `json:"children"`
-		} `json:"root"`
-	}
-
-	if err := json.Unmarshal([]byte(textToProcess), &lexical); err != nil {
-		return ""
-	}
-
-	var parts []string
-	for _, paragraph := range lexical.Root.Children {
-		for _, child := range paragraph.Children {
-			if child.Text != "" {
-				parts = append(parts, child.Text)
-			}
-		}
-	}
-
-	return strings.Join(parts, " ")
-}
-
-func indexClineFamily(tasksPath, toolName string) (int, int) {
-	taskDirs, err := os.ReadDir(tasksPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, taskDir := range taskDirs {
-		if !taskDir.IsDir() {
-			continue
-		}
-
-		taskPath := filepath.Join(tasksPath, taskDir.Name())
-		uiMessagesPath := filepath.Join(taskPath, "ui_messages.json")
-
-		if !pathExists(uiMessagesPath) {
-			continue
-		}
-
-		s, m := indexClineTask(uiMessagesPath, taskDir.Name(), toolName)
-		totalSessions += s
-		totalMessages += m
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexClineTask(uiMessagesPath, taskID, toolName string) (int, int) {
-	data, err := os.ReadFile(uiMessagesPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	var uiMessages []struct {
-		Ts   int64  `json:"ts"`
-		Type string `json:"type"`
-		Say  string `json:"say"`
-		Ask  string `json:"ask"`
-		Text string `json:"text"`
-	}
-
-	if err := json.Unmarshal(data, &uiMessages); err != nil {
-		return 0, 0
-	}
-
-	if len(uiMessages) == 0 {
-		return 0, 0
-	}
-
-	projectName := toolName
-	var firstUserMsg string
-	var totalInputTokens, totalOutputTokens, totalCacheRead, totalCacheWrite int
-	var totalCost float64
-	var sessionProvider string
-	msgCount := 0
-
-	for _, msg := range uiMessages {
-		if msg.Say == "api_req_started" && msg.Text != "" {
-			var apiReq struct {
-				TokensIn          int     `json:"tokensIn"`
-				TokensOut         int     `json:"tokensOut"`
-				CacheWrites       int     `json:"cacheWrites"`
-				CacheReads        int     `json:"cacheReads"`
-				Cost              float64 `json:"cost"`
-				InferenceProvider string  `json:"inferenceProvider"`
-			}
-			if err := json.Unmarshal([]byte(msg.Text), &apiReq); err == nil {
-				totalInputTokens += apiReq.TokensIn
-				totalOutputTokens += apiReq.TokensOut
-				totalCacheRead += apiReq.CacheReads
-				totalCacheWrite += apiReq.CacheWrites
-				totalCost += apiReq.Cost
-				if sessionProvider == "" && apiReq.InferenceProvider != "" {
-					sessionProvider = apiReq.InferenceProvider
-				}
-			}
-			continue
-		}
-
-		if msg.Text == "" {
-			continue
-		}
-
-		if msg.Say == "api_req_finished" || msg.Say == "checkpoint_saved" {
-			continue
-		}
-
-		var role string
-		if msg.Type == "say" && (msg.Say == "text" || msg.Say == "user_feedback") {
-			role = "user"
-		} else if msg.Type == "say" && msg.Say == "" {
-			role = "assistant"
-		} else {
-			continue
-		}
-
-		if role == "user" && firstUserMsg == "" {
-			firstUserMsg = truncate(msg.Text, 200)
-		}
-
-		timestamp := time.UnixMilli(msg.Ts)
-
-		err := db.InsertMessage(db.Message{
-			SessionID: taskID,
-			Project:   projectName,
-			Role:      role,
-			Content:   msg.Text,
-			Timestamp: timestamp,
-			Tool:      toolName,
-			Provider:  sessionProvider,
-		})
-		if err != nil {
-			indexErrors++
-			continue
-		}
-		msgCount++
-	}
-
-	if msgCount > 0 {
-		_ = db.InsertSession(db.Session{
-			ID:                taskID,
-			Project:           projectName,
-			FirstQuery:        firstUserMsg,
-			MessageCount:      msgCount,
-			Tool:              toolName,
-			FilePath:          uiMessagesPath,
-			Provider:          sessionProvider,
-			TotalInputTokens:  totalInputTokens,
-			TotalOutputTokens: totalOutputTokens,
-			TotalCacheRead:    totalCacheRead,
-			TotalCacheWrite:   totalCacheWrite,
-			TotalCostUSD:      totalCost,
-		})
-		return 1, msgCount
-	}
-
-	return 0, 0
-}
-
-func indexOpencode(basePath string) (int, int) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return 0, 0
-	}
-
-	storagePath := filepath.Join(home, ".local/share/opencode/storage")
-	messagePath := filepath.Join(storagePath, "message")
-
-	if !pathExists(messagePath) {
-		return 0, 0
-	}
-
-	sessionDirs, err := os.ReadDir(messagePath)
-	if err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, sessionDir := range sessionDirs {
-		if !sessionDir.IsDir() {
-			continue
-		}
-
-		sessionID := sessionDir.Name()
-		s, m := indexOpenCodeSession(storagePath, sessionID)
-		totalSessions += s
-		totalMessages += m
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexJSONLSession(path, tool string) (int, int) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, 0
-	}
-	defer func() { _ = file.Close() }()
-
-	info, _ := file.Stat()
-	if info.Size() == 0 {
-		return 0, 0
-	}
-
-	// Read file content
-	data, _ := io.ReadAll(file)
-	lines := strings.Split(string(data), "\n")
-
-	var firstUserMsg string
-	sessionID := filepath.Base(path)
-	sessionID = strings.TrimSuffix(sessionID, ".jsonl")
-	projectName := extractProjectName(path)
-	msgCount := 0
-
-	var sessionCwd, sessionGitBranch, sessionVersion string
-	var sessionStartTime, sessionEndTime time.Time
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-
-		var entry map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-
-		// Skip non-message entries
-		entryType, _ := entry["type"].(string)
-		if entryType != "user" && entryType != "assistant" {
-			continue
-		}
-
-		// Extract message content
-		var content string
-		var role string
-
-		uuid, _ := entry["uuid"].(string)
-		parentUuid, _ := entry["parentUuid"].(string)
-		cwd, _ := entry["cwd"].(string)
-		gitBranch, _ := entry["gitBranch"].(string)
-		version, _ := entry["version"].(string)
-
-		timestamp := time.Now()
-		if tsStr, ok := entry["timestamp"].(string); ok && tsStr != "" {
-			if parsed, err := time.Parse(time.RFC3339, tsStr); err == nil {
-				timestamp = parsed
-			}
-		}
-
-		if sessionCwd == "" && cwd != "" {
-			sessionCwd = cwd
-		}
-		if sessionGitBranch == "" && gitBranch != "" {
-			sessionGitBranch = gitBranch
-		}
-		if sessionVersion == "" && version != "" {
-			sessionVersion = version
-		}
-		if sessionStartTime.IsZero() {
-			sessionStartTime = timestamp
-		}
-		sessionEndTime = timestamp
-
-		// Try new format first: {"type":"user","message":{"role":"user","content":"..."}}
-		if msg, ok := entry["message"].(map[string]interface{}); ok {
-			role, _ = msg["role"].(string)
-
-			// Handle different content formats
-			switch c := msg["content"].(type) {
-			case string:
-				content = c
-			case []interface{}:
-				// Claude's content array format
-				for _, item := range c {
-					if block, ok := item.(map[string]interface{}); ok {
-						if text, ok := block["text"].(string); ok {
-							content += text + " "
-						}
-					}
-				}
-			}
-		} else {
-			// Try old format: {"type":"user","content":"..."}
-			role = entryType // "user" or "assistant"
-			if c, ok := entry["content"].(string); ok {
-				content = c
-			}
-		}
-
-		if content == "" {
-			continue
-		}
-
-		// Capture first user message
-		if role == "user" && firstUserMsg == "" {
-			firstUserMsg = truncate(content, 200)
-		}
-
-		err := db.InsertMessage(db.Message{
-			SessionID:        sessionID,
-			Project:          projectName,
-			Role:             role,
-			Content:          content,
-			Timestamp:        timestamp,
-			Tool:             tool,
-			MessageUUID:      uuid,
-			ParentUUID:       parentUuid,
-			WorkingDirectory: cwd,
-		})
-		if err != nil {
-			indexErrors++
-			continue
-		}
-		msgCount++
-	}
-
-	if msgCount > 0 {
-		_ = db.InsertSession(db.Session{
-			ID:               sessionID,
-			Project:          projectName,
-			FirstQuery:       firstUserMsg,
-			MessageCount:     msgCount,
-			Tool:             tool,
-			FilePath:         path,
-			CLIVersion:       sessionVersion,
-			GitBranch:        sessionGitBranch,
-			WorkingDirectory: sessionCwd,
-			StartTime:        sessionStartTime,
-			EndTime:          sessionEndTime,
-		})
-		return 1, msgCount
-	}
-
-	return 0, 0
-}
-
-func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
-	messagePath := filepath.Join(storagePath, "message", sessionID)
-	partBasePath := filepath.Join(storagePath, "part")
-
-	if !pathExists(messagePath) {
-		return 0, 0
-	}
-
-	messageFiles, err := os.ReadDir(messagePath)
-	if err != nil {
-		return 0, 0
-	}
-
-	sessionMeta := findOpenCodeSessionMeta(storagePath, sessionID)
-
-	projectName := ""
-	var sessionWorkingDir string
-	var cliVersion string
-	if sessionMeta != nil {
-		if sessionMeta.Directory != "" {
-			projectName = filepath.Base(sessionMeta.Directory)
-			sessionWorkingDir = sessionMeta.Directory
-		}
-		cliVersion = sessionMeta.Version
-	}
-
-	var firstUserMsg string
-	var sessionModel, sessionProvider string
-	var sessionStartTime, sessionEndTime time.Time
-	var totalInputTokens, totalOutputTokens, totalCacheRead, totalCacheWrite, totalReasoningTokens int
-	var totalCostUSD float64
-	msgCount := 0
-
-	for _, msgFile := range messageFiles {
-		if msgFile.IsDir() || !strings.HasPrefix(msgFile.Name(), "msg_") {
-			continue
-		}
-
-		msgFilePath := filepath.Join(messagePath, msgFile.Name())
-		msgData, err := os.ReadFile(msgFilePath)
-		if err != nil {
-			continue
-		}
-
-		var msg map[string]interface{}
-		if err := json.Unmarshal(msgData, &msg); err != nil {
-			continue
-		}
-
-		role, _ := msg["role"].(string)
-		if role == "" {
-			continue
-		}
-
-		messageID := strings.TrimSuffix(msgFile.Name(), ".json")
-		content := getMessageContent(partBasePath, messageID)
-
-		if content == "" {
-			continue
-		}
-
-		var model, provider string
-		if modelMap, ok := msg["model"].(map[string]interface{}); ok {
-			model, _ = modelMap["modelID"].(string)
-			provider, _ = modelMap["providerID"].(string)
-		}
-		if model == "" {
-			model, _ = msg["modelID"].(string)
-		}
-		if provider == "" {
-			provider, _ = msg["providerID"].(string)
-		}
-
-		if sessionModel == "" && model != "" {
-			sessionModel = model
-		}
-		if sessionProvider == "" && provider != "" {
-			sessionProvider = provider
-		}
-
-		if sessionWorkingDir == "" {
-			if pathMap, ok := msg["path"].(map[string]interface{}); ok {
-				if cwd, ok := pathMap["cwd"].(string); ok && cwd != "" {
-					sessionWorkingDir = cwd
-					projectName = filepath.Base(cwd)
-				} else if root, ok := pathMap["root"].(string); ok && root != "" {
-					sessionWorkingDir = root
-					projectName = filepath.Base(root)
-				}
-			}
-		}
-
-		var msgTimestamp time.Time
-		if timeMap, ok := msg["time"].(map[string]interface{}); ok {
-			if created, ok := timeMap["created"].(float64); ok {
-				msgTimestamp = time.UnixMilli(int64(created))
-			}
-		}
-		if msgTimestamp.IsZero() {
-			msgTimestamp = time.Now()
-		}
-
-		var inputTokens, outputTokens, cacheRead, cacheWrite, reasoning int
-		if tokensMap, ok := msg["tokens"].(map[string]interface{}); ok {
-			if v, ok := tokensMap["input"].(float64); ok {
-				inputTokens = int(v)
-			}
-			if v, ok := tokensMap["output"].(float64); ok {
-				outputTokens = int(v)
-			}
-			if v, ok := tokensMap["reasoning"].(float64); ok {
-				reasoning = int(v)
-				outputTokens += reasoning
-			}
-			if cacheMap, ok := tokensMap["cache"].(map[string]interface{}); ok {
-				if v, ok := cacheMap["read"].(float64); ok {
-					cacheRead = int(v)
-				}
-				if v, ok := cacheMap["write"].(float64); ok {
-					cacheWrite = int(v)
-				}
-			}
-		}
-
-		var costUSD float64
-		if v, ok := msg["cost"].(float64); ok {
-			costUSD = v
-		}
-
-		msgDate := msgTimestamp.Format("2006-01-02")
-
-		totalInputTokens += inputTokens
-		totalOutputTokens += outputTokens
-		totalCacheRead += cacheRead
-		totalCacheWrite += cacheWrite
-		totalReasoningTokens += reasoning
-		totalCostUSD += costUSD
-
-		if sessionStartTime.IsZero() || msgTimestamp.Before(sessionStartTime) {
-			sessionStartTime = msgTimestamp
-		}
-		if msgTimestamp.After(sessionEndTime) {
-			sessionEndTime = msgTimestamp
-		}
-
-		msgCount++
-
-		if role == "user" && firstUserMsg == "" && !isSystemDirective(content) {
-			firstUserMsg = truncate(sanitizeContent(content), 200)
-		}
-
-		_ = db.InsertMessage(db.Message{
-			SessionID:        sessionID,
-			Project:          projectName,
-			Role:             role,
-			Content:          content,
-			Timestamp:        msgTimestamp,
-			Tool:             "opencode",
-			Model:            model,
-			Provider:         provider,
-			InputTokens:      inputTokens,
-			OutputTokens:     outputTokens,
-			CacheReadTokens:  cacheRead,
-			CacheWriteTokens: cacheWrite,
-			ReasoningTokens:  reasoning,
-			CostUSD:          costUSD,
-			Date:             msgDate,
-		})
-	}
-
-	if msgCount > 0 {
-		if projectName == "" {
-			projectName = "opencode"
-		}
-
-		sessionQuery := firstUserMsg
-		if sessionQuery == "" && sessionMeta != nil && sessionMeta.Title != "" {
-			sessionQuery = sessionMeta.Title
-		}
-
-		sessionPath := filepath.Join(storagePath, "session")
-		sessionDate := ""
-		if !sessionStartTime.IsZero() {
-			sessionDate = sessionStartTime.Format("2006-01-02")
-		}
-		_ = db.InsertSession(db.Session{
-			ID:                   sessionID,
-			Project:              projectName,
-			FirstQuery:           sessionQuery,
-			MessageCount:         msgCount,
-			Tool:                 "opencode",
-			FilePath:             sessionPath,
-			Model:                sessionModel,
-			Provider:             sessionProvider,
-			TotalInputTokens:     totalInputTokens,
-			TotalOutputTokens:    totalOutputTokens,
-			TotalCacheRead:       totalCacheRead,
-			TotalCacheWrite:      totalCacheWrite,
-			TotalReasoningTokens: totalReasoningTokens,
-			TotalCostUSD:         totalCostUSD,
-			CLIVersion:           cliVersion,
-			WorkingDirectory:     sessionWorkingDir,
-			StartTime:            sessionStartTime,
-			EndTime:              sessionEndTime,
-			Date:                 sessionDate,
-		})
-		return 1, msgCount
-	}
-
-	return 0, 0
-}
-
-func getMessageContent(partBasePath, messageID string) string {
-	partPath := filepath.Join(partBasePath, messageID)
-	if !pathExists(partPath) {
-		return ""
-	}
-
-	partFiles, err := os.ReadDir(partPath)
-	if err != nil {
-		return ""
-	}
-
-	var contentParts []string
-	for _, partFile := range partFiles {
-		if partFile.IsDir() {
-			continue
-		}
-
-		partFilePath := filepath.Join(partPath, partFile.Name())
-		partData, err := os.ReadFile(partFilePath)
-		if err != nil {
-			continue
-		}
-
-		var part map[string]interface{}
-		if err := json.Unmarshal(partData, &part); err != nil {
-			continue
-		}
-
-		partType, _ := part["type"].(string)
-		if partType == "text" {
-			if text, ok := part["text"].(string); ok {
-				contentParts = append(contentParts, text)
-			}
-		}
-	}
-
-	return strings.Join(contentParts, "\n")
-}
-
-func extractProjectName(path string) string {
-	// Extract from path like: -Users-raghu-Projects-PILAN-INTELLIGENCE-PRISM
-	dir := filepath.Dir(path)
-	parts := strings.Split(dir, string(os.PathSeparator))
-
-	for _, part := range parts {
-		if strings.HasPrefix(part, "-") && strings.Contains(part, "-") {
-			// Convert: -Volumes-UMBRA-BACKUP-PERSONAL-FORGE -> PERSONAL-FORGE
-			segments := strings.Split(part, "-")
-			if len(segments) > 2 {
-				// Find last meaningful segment
-				for i := len(segments) - 1; i >= 0; i-- {
-					if segments[i] != "" && segments[i] != "Users" && segments[i] != "Volumes" {
-						return strings.Join(segments[max(1, i-1):], "-")
-					}
-				}
-			}
-			return part
-		}
-	}
-
-	return filepath.Base(dir)
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// indexCrush indexes Crush CLI sessions from ~/.crush/crush.db
-// Crush has the cleanest SQLite schema of all tools with proper sessions/messages tables
-func indexCrush(dbPath string) (int, int) {
-	crushDB, err := db.OpenReadOnlySQLite(dbPath)
-	if err != nil {
-		return 0, 0
-	}
-	defer crushDB.Close()
-
-	rows, err := crushDB.Query(`
-		SELECT s.id, s.title, m.role, m.parts, m.created_at, m.model, m.provider
-		FROM sessions s
-		JOIN messages m ON m.session_id = s.id
-		ORDER BY s.id, m.created_at
-	`)
-	if err != nil {
-		return 0, 0
-	}
-	defer rows.Close()
-
-	sessionMsgCounts := make(map[string]int)
-	sessionFirstMsg := make(map[string]string)
-	sessionModels := make(map[string]string)
-	sessionProviders := make(map[string]string)
-	totalMessages := 0
-
-	for rows.Next() {
-		var sessionID, title, role, partsJSON string
-		var model, provider sql.NullString
-		var createdAt int64
-
-		if err := rows.Scan(&sessionID, &title, &role, &partsJSON, &createdAt, &model, &provider); err != nil {
-			continue
-		}
-
-		var parts []map[string]interface{}
-		if err := json.Unmarshal([]byte(partsJSON), &parts); err != nil {
-			continue
-		}
-
-		var content string
-		for _, part := range parts {
-			partType, _ := part["type"].(string)
-			if partType == "text" {
-				if data, ok := part["data"].(map[string]interface{}); ok {
-					if text, ok := data["text"].(string); ok {
-						content += text
-					}
-				}
-			}
-		}
-
-		if content == "" {
-			continue
-		}
-
-		projectName := title
-		if projectName == "" {
-			projectName = "crush"
-		}
-
-		modelStr := ""
-		if model.Valid {
-			modelStr = model.String
-		}
-		providerStr := ""
-		if provider.Valid {
-			providerStr = provider.String
-		}
-
-		if sessionModels[sessionID] == "" && modelStr != "" {
-			sessionModels[sessionID] = modelStr
-		}
-		if sessionProviders[sessionID] == "" && providerStr != "" {
-			sessionProviders[sessionID] = providerStr
-		}
-
-		timestamp := time.UnixMilli(createdAt)
-
-		err := db.InsertMessage(db.Message{
-			SessionID: sessionID,
-			Project:   projectName,
-			Role:      role,
-			Content:   content,
-			Timestamp: timestamp,
-			Tool:      "crush",
-			Model:     modelStr,
-			Provider:  providerStr,
-		})
-		if err != nil {
-			indexErrors++
-			continue
-		}
-
-		sessionMsgCounts[sessionID]++
-		if role == "user" && sessionFirstMsg[sessionID] == "" {
-			sessionFirstMsg[sessionID] = truncate(content, 200)
-		}
-		totalMessages++
-	}
-
-	for sessionID, msgCount := range sessionMsgCounts {
-		_ = db.InsertSession(db.Session{
-			ID:           sessionID,
-			Project:      "crush",
-			FirstQuery:   sessionFirstMsg[sessionID],
-			MessageCount: msgCount,
-			Tool:         "crush",
-			FilePath:     dbPath,
-			Model:        sessionModels[sessionID],
-			Provider:     sessionProviders[sessionID],
-		})
-	}
-
-	return len(sessionMsgCounts), totalMessages
-}
-
-func indexKiro(workspaceSessionsPath string) (int, int) {
-	workspaceDirs, err := os.ReadDir(workspaceSessionsPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, wsDir := range workspaceDirs {
-		if !wsDir.IsDir() {
-			continue
-		}
-
-		workspaceDir := filepath.Join(workspaceSessionsPath, wsDir.Name())
-		sessionFiles, err := filepath.Glob(filepath.Join(workspaceDir, "*.json"))
-		if err != nil {
-			continue
-		}
-
-		for _, sessionFile := range sessionFiles {
-			if filepath.Base(sessionFile) == "sessions.json" {
-				continue
-			}
-
-			s, m := indexKiroSession(sessionFile)
-			totalSessions += s
-			totalMessages += m
-		}
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexKiroSession(sessionPath string) (int, int) {
-	data, err := os.ReadFile(sessionPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	var session struct {
-		SessionID     string `json:"sessionId"`
-		Title         string `json:"title"`
-		WorkspacePath string `json:"workspacePath"`
-		History       []struct {
-			Message struct {
-				Role    string      `json:"role"`
-				Content interface{} `json:"content"`
-				ID      string      `json:"id"`
-			} `json:"message"`
-		} `json:"history"`
-	}
-
-	if err := json.Unmarshal(data, &session); err != nil {
-		return 0, 0
-	}
-
-	if len(session.History) == 0 {
-		return 0, 0
-	}
-
-	projectName := session.Title
-	if projectName == "" {
-		projectName = filepath.Base(session.WorkspacePath)
-	}
-	if projectName == "" {
-		projectName = "kiro"
-	}
-
-	messagesIndexed := 0
-	for _, h := range session.History {
-		var content string
-		switch c := h.Message.Content.(type) {
-		case string:
-			content = c
-		case []interface{}:
-			for _, item := range c {
-				if m, ok := item.(map[string]interface{}); ok {
-					if t, ok := m["type"].(string); ok && t == "text" {
-						if text, ok := m["text"].(string); ok {
-							content += text
-						}
-					}
-				}
-			}
-		}
-
-		if content == "" {
-			continue
-		}
-
-		role := h.Message.Role
-		if role != "user" && role != "assistant" {
-			continue
-		}
-
-		err := db.InsertMessage(db.Message{
-			SessionID: session.SessionID,
-			Role:      role,
-			Content:   content,
-			Project:   projectName,
-			Tool:      "kiro",
-			Timestamp: time.Now(),
-		})
-		if err == nil {
-			messagesIndexed++
-		}
-	}
-
-	if messagesIndexed > 0 {
-		_ = db.InsertSessionSimple(session.SessionID, projectName, session.Title, sessionPath, "kiro", messagesIndexed)
-		return 1, messagesIndexed
-	}
-
-	return 0, 0
-}
-
-func indexAntigravityCodeTracker(codeTrackerPath string) (int, int) {
-	jsonlFiles, err := filepath.Glob(filepath.Join(codeTrackerPath, "*", "*.jsonl"))
-	if err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, jsonlPath := range jsonlFiles {
-		s, m := indexAntigravitySession(jsonlPath)
-		totalSessions += s
-		totalMessages += m
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexAntigravitySession(jsonlPath string) (int, int) {
-	file, err := os.Open(jsonlPath)
-	if err != nil {
-		return 0, 0
-	}
-	defer file.Close()
-
-	sessionID := filepath.Base(jsonlPath)
-	sessionID = strings.TrimSuffix(sessionID, ".jsonl")
-
-	parentDir := filepath.Dir(jsonlPath)
-	projectName := filepath.Base(parentDir)
-	if projectName == "no_repo" {
-		projectName = "antigravity"
-	}
-
-	scanner := bufio.NewScanner(file)
-	buf := make([]byte, 0, 1024*1024)
-	scanner.Buffer(buf, 10*1024*1024)
-
-	messagesIndexed := 0
-	var firstQuery string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-
-		// Antigravity JSONL files have a binary/protobuf-style prefix before JSON
-		// Strip everything before the first '{' to get valid JSON
-		jsonStart := strings.Index(line, "{")
-		if jsonStart == -1 {
-			continue
-		}
-		jsonLine := line[jsonStart:]
-
-		var event struct {
-			Type      string `json:"type"`
-			Timestamp string `json:"timestamp"`
-			Content   string `json:"content"`
-		}
-
-		if err := json.Unmarshal([]byte(jsonLine), &event); err != nil {
-			continue
-		}
-
-		if event.Type != "user" && event.Type != "assistant" {
-			continue
-		}
-
-		if event.Content == "" {
-			continue
-		}
-
-		role := event.Type
-		timestamp := time.Now()
-		if event.Timestamp != "" {
-			if t, err := time.Parse(time.RFC3339, event.Timestamp); err == nil {
-				timestamp = t
-			}
-		}
-
-		if firstQuery == "" && role == "user" {
-			if len(event.Content) > 100 {
-				firstQuery = event.Content[:100] + "..."
-			} else {
-				firstQuery = event.Content
-			}
-		}
-
-		err := db.InsertMessage(db.Message{
-			SessionID: sessionID,
-			Role:      role,
-			Content:   event.Content,
-			Project:   projectName,
-			Tool:      "antigravity",
-			Timestamp: timestamp,
-		})
-		if err == nil {
-			messagesIndexed++
-		}
-	}
-
-	if messagesIndexed > 0 {
-		_ = db.InsertSessionSimple(sessionID, projectName, firstQuery, jsonlPath, "antigravity", messagesIndexed)
-		return 1, messagesIndexed
-	}
-
-	return 0, 0
-}
-
-// indexVSCodeAIChat indexes VS Code-based IDEs that use state.vscdb
-// These share the same format as Cursor: ItemTable with aichat.chatdata JSON blob
-func indexVSCodeAIChat(workspaceStoragePath, toolName string) (int, int) {
-	workspaceDirs, err := os.ReadDir(workspaceStoragePath)
-	if err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, wsDir := range workspaceDirs {
-		if !wsDir.IsDir() {
-			continue
-		}
-
-		dbPath := filepath.Join(workspaceStoragePath, wsDir.Name(), "state.vscdb")
-		if !pathExists(dbPath) {
-			continue
-		}
-
-		s, m := indexVSCodeWorkspace(dbPath, wsDir.Name(), toolName)
-		totalSessions += s
-		totalMessages += m
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexVSCodeWorkspace(dbPath, workspaceID, toolName string) (int, int) {
-	sqliteDB, err := db.OpenReadOnlySQLite(dbPath)
-	if err != nil {
-		return 0, 0
-	}
-	defer sqliteDB.Close()
-
-	var chatDataJSON string
-	row := sqliteDB.QueryRow("SELECT value FROM ItemTable WHERE key='workbench.panel.aichat.view.aichat.chatdata'")
-	if err := row.Scan(&chatDataJSON); err != nil {
-		return 0, 0
-	}
-
-	if chatDataJSON == "" {
-		return 0, 0
-	}
-
-	var chatData struct {
-		Tabs []struct {
-			TabID     string `json:"tabId"`
-			ChatTitle string `json:"chatTitle"`
-			Bubbles   []struct {
-				Type     string `json:"type"`
-				ID       string `json:"id"`
-				RawText  string `json:"rawText"`
-				Text     string `json:"text"`
-				InitText string `json:"initText"`
-				RichText string `json:"richText"`
-			} `json:"bubbles"`
-		} `json:"tabs"`
-	}
-
-	if err := json.Unmarshal([]byte(chatDataJSON), &chatData); err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, tab := range chatData.Tabs {
-		if len(tab.Bubbles) == 0 {
-			continue
-		}
-
-		sessionID := tab.TabID
-		if sessionID == "" {
-			continue
-		}
-
-		projectName := tab.ChatTitle
-		if projectName == "" {
-			projectName = toolName
-		}
-
-		var firstUserMsg string
-		msgCount := 0
-
-		for _, bubble := range tab.Bubbles {
-			var role, content string
-
-			if bubble.Type == "user" {
-				role = "user"
-				content = extractCursorUserContent(bubble.InitText, bubble.RichText, bubble.RawText)
-			} else if bubble.Type == "ai" {
-				role = "assistant"
-				content = bubble.Text
-				if content == "" {
-					content = bubble.RawText
-				}
-			} else {
-				continue
-			}
-
-			if content == "" {
-				continue
-			}
-
-			if role == "user" && firstUserMsg == "" {
-				firstUserMsg = truncate(content, 200)
-			}
-
-			err := db.InsertMessage(db.Message{
-				SessionID: sessionID,
-				Project:   projectName,
-				Role:      role,
-				Content:   content,
-				Timestamp: time.Now(),
-				Tool:      toolName,
-			})
-			if err != nil {
-				indexErrors++
-				continue
-			}
-			msgCount++
-		}
-
-		if msgCount > 0 {
-			_ = db.InsertSessionSimple(sessionID, projectName, firstUserMsg, dbPath, toolName, msgCount)
-			totalSessions++
-			totalMessages += msgCount
-		}
-	}
-
-	return totalSessions, totalMessages
-}
-
-// indexAmp indexes Amp CLI sessions from ~/.local/share/amp/
-// Format: history.jsonl for prompts, threads/ directory for full conversations
-func indexAmp(basePath string) (int, int) {
-	threadsPath := filepath.Join(basePath, "threads")
-	if !pathExists(threadsPath) {
-		return 0, 0
-	}
-
-	threadFiles, err := os.ReadDir(threadsPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for _, threadFile := range threadFiles {
-		if threadFile.IsDir() || !strings.HasSuffix(threadFile.Name(), ".json") {
-			continue
-		}
-
-		threadPath := filepath.Join(threadsPath, threadFile.Name())
-		s, m := indexAmpThread(threadPath)
-		totalSessions += s
-		totalMessages += m
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexAmpThread(threadPath string) (int, int) {
-	data, err := os.ReadFile(threadPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	var thread struct {
-		ID       string `json:"id"`
-		Title    string `json:"title"`
-		Messages []struct {
-			Role      string `json:"role"`
-			MessageID int    `json:"messageId"`
-			Content   []struct {
-				Type     string `json:"type"`
-				Text     string `json:"text"`
-				Provider string `json:"provider"`
-			} `json:"content"`
-		} `json:"messages"`
-		Created int64 `json:"created"`
-	}
-
-	if err := json.Unmarshal(data, &thread); err != nil {
-		return 0, 0
-	}
-
-	if len(thread.Messages) == 0 {
-		return 0, 0
-	}
-
-	sessionID := thread.ID
-	if sessionID == "" {
-		sessionID = strings.TrimSuffix(filepath.Base(threadPath), ".json")
-	}
-
-	projectName := "amp"
-	var sessionProvider string
-
-	var firstUserMsg string
-	msgCount := 0
-
-	for _, msg := range thread.Messages {
-		var content string
-		var msgProvider string
-		for _, c := range msg.Content {
-			if c.Type == "text" && c.Text != "" {
-				content += c.Text
-			}
-			if c.Provider != "" && msgProvider == "" {
-				msgProvider = c.Provider
-			}
-		}
-
-		if sessionProvider == "" && msgProvider != "" {
-			sessionProvider = msgProvider
-		}
-
-		if content == "" {
-			continue
-		}
-
-		if msg.Role == "user" && firstUserMsg == "" {
-			firstUserMsg = truncate(content, 200)
-		}
-
-		timestamp := time.UnixMilli(thread.Created)
-
-		err := db.InsertMessage(db.Message{
-			SessionID: sessionID,
-			Project:   projectName,
-			Role:      msg.Role,
-			Content:   content,
-			Timestamp: timestamp,
-			Tool:      "amp",
-			Provider:  msgProvider,
-		})
-		if err != nil {
-			indexErrors++
-			continue
-		}
-		msgCount++
-	}
-
-	if msgCount > 0 {
-		_ = db.InsertSession(db.Session{
-			ID:           sessionID,
-			Project:      projectName,
-			FirstQuery:   firstUserMsg,
-			MessageCount: msgCount,
-			Tool:         "amp",
-			FilePath:     threadPath,
-			Provider:     sessionProvider,
-		})
-		return 1, msgCount
-	}
-
-	return 0, 0
-}
-
-// indexCodex indexes OpenAI Codex CLI sessions from ~/.codex/
-// Format: history.jsonl for prompts, sessions/ and archived_sessions/ directories with .jsonl files
-func indexCodex(basePath string) (int, int) {
-	totalSessions := 0
-	totalMessages := 0
-
-	sessionDirs := []string{
-		filepath.Join(basePath, "sessions"),
-		filepath.Join(basePath, "archived_sessions"),
-	}
-
-	foundSessions := false
-	for _, sessionsPath := range sessionDirs {
-		if !pathExists(sessionsPath) {
-			continue
-		}
-		foundSessions = true
-
-		_ = filepath.Walk(sessionsPath, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-
-			if info.IsDir() {
-				return nil
-			}
-
-			if strings.HasSuffix(info.Name(), ".jsonl") {
-				s, m := indexCodexSessionJSONL(path)
-				totalSessions += s
-				totalMessages += m
-			}
-
-			return nil
-		})
-	}
-
-	if !foundSessions {
-		historyPath := filepath.Join(basePath, "history.jsonl")
-		if pathExists(historyPath) {
-			return indexCodexHistory(historyPath)
-		}
-		return 0, 0
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexCodexHistory(historyPath string) (int, int) {
-	data, err := os.ReadFile(historyPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	lines := strings.Split(string(data), "\n")
-	sessionMessages := make(map[string][]struct {
-		role      string
-		content   string
-		timestamp time.Time
-	})
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-
-		var entry struct {
-			SessionID string `json:"session_id"`
-			Ts        int64  `json:"ts"`
-			Text      string `json:"text"`
-		}
-
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-
-		if entry.Text == "" {
-			continue
-		}
-
-		sessionID := entry.SessionID
-		if sessionID == "" {
-			sessionID = "codex-default"
-		}
-
-		sessionMessages[sessionID] = append(sessionMessages[sessionID], struct {
-			role      string
-			content   string
-			timestamp time.Time
-		}{
-			role:      "user",
-			content:   entry.Text,
-			timestamp: time.UnixMilli(entry.Ts),
-		})
-	}
-
-	totalSessions := 0
-	totalMessages := 0
-
-	for sessionID, messages := range sessionMessages {
-		var firstUserMsg string
-		msgCount := 0
-
-		for _, msg := range messages {
-			if firstUserMsg == "" {
-				firstUserMsg = truncate(msg.content, 200)
-			}
-
-			err := db.InsertMessage(db.Message{
-				SessionID: sessionID,
-				Project:   "codex",
-				Role:      msg.role,
-				Content:   msg.content,
-				Timestamp: msg.timestamp,
-				Tool:      "codex",
-			})
-			if err != nil {
-				indexErrors++
-				continue
-			}
-			msgCount++
-		}
-
-		if msgCount > 0 {
-			_ = db.InsertSessionSimple(sessionID, "codex", firstUserMsg, historyPath, "codex", msgCount)
-			totalSessions++
-			totalMessages += msgCount
-		}
-	}
-
-	return totalSessions, totalMessages
-}
-
-func indexCodexSessionJSONL(sessionPath string) (int, int) {
-	data, err := os.ReadFile(sessionPath)
-	if err != nil {
-		return 0, 0
-	}
-
-	lines := strings.Split(string(data), "\n")
-	var sessionID, cliVersion, cwd, sessionModel, sessionProvider string
-	var currentModel string
-	var messages []struct {
-		role      string
-		content   string
-		timestamp time.Time
-		model     string
-	}
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-
-		var entry map[string]interface{}
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
-			continue
-		}
-
-		entryType, _ := entry["type"].(string)
-		timestampStr, _ := entry["timestamp"].(string)
-
-		timestamp := time.Now()
-		if timestampStr != "" {
-			if parsed, err := time.Parse(time.RFC3339, timestampStr); err == nil {
-				timestamp = parsed
-			}
-		}
-
-		if entryType == "session_meta" {
-			if payload, ok := entry["payload"].(map[string]interface{}); ok {
-				sessionID, _ = payload["id"].(string)
-				cliVersion, _ = payload["cli_version"].(string)
-				cwd, _ = payload["cwd"].(string)
-				sessionProvider, _ = payload["model_provider"].(string)
-			}
-		} else if entryType == "turn_context" {
-			if payload, ok := entry["payload"].(map[string]interface{}); ok {
-				currentModel, _ = payload["model"].(string)
-				if sessionModel == "" && currentModel != "" {
-					sessionModel = currentModel
-				}
-			}
-		} else if entryType == "event_msg" {
-			if payload, ok := entry["payload"].(map[string]interface{}); ok {
-				msgType, _ := payload["type"].(string)
-				message, _ := payload["message"].(string)
-
-				if message == "" {
-					continue
-				}
-
-				var role string
-				if msgType == "user_message" {
-					role = "user"
-				} else if msgType == "agent_message" {
-					role = "assistant"
-				} else {
-					continue
-				}
-
-				messages = append(messages, struct {
-					role      string
-					content   string
-					timestamp time.Time
-					model     string
-				}{role: role, content: message, timestamp: timestamp, model: currentModel})
-			}
-		}
-	}
-
-	if len(messages) == 0 {
-		return 0, 0
-	}
-
-	if sessionID == "" {
-		sessionID = strings.TrimSuffix(filepath.Base(sessionPath), ".jsonl")
-	}
-
-	var firstUserMsg string
-	msgCount := 0
-
-	for _, msg := range messages {
-		if msg.role == "user" && firstUserMsg == "" {
-			firstUserMsg = truncate(msg.content, 200)
-		}
-
-		err := db.InsertMessage(db.Message{
-			SessionID:        sessionID,
-			Project:          "codex",
-			Role:             msg.role,
-			Content:          msg.content,
-			Timestamp:        msg.timestamp,
-			Tool:             "codex",
-			Model:            msg.model,
-			Provider:         sessionProvider,
-			WorkingDirectory: cwd,
-		})
-		if err != nil {
-			indexErrors++
-			continue
-		}
-		msgCount++
-	}
-
-	if msgCount > 0 {
-		_ = db.InsertSession(db.Session{
-			ID:               sessionID,
-			Project:          "codex",
-			FirstQuery:       firstUserMsg,
-			MessageCount:     msgCount,
-			Tool:             "codex",
-			FilePath:         sessionPath,
-			Model:            sessionModel,
-			Provider:         sessionProvider,
-			CLIVersion:       cliVersion,
-			WorkingDirectory: cwd,
-		})
-		return 1, msgCount
-	}
-
-	return 0, 0
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
 func runOnboarding() {
-	model := tui.NewOnboardingModel()
+	// Only index last 30 days during onboarding for speed
+	indexCutoff = time.Now().AddDate(0, -1, 0)
 
-	model.OnIndex = func() (tui.Stats, []tui.Discovery) {
-		if err := db.InitDB(); err != nil {
-			return tui.Stats{}, nil
-		}
-		defer db.CloseDB()
-
-		home, _ := os.UserHomeDir()
-
-		totalSessions := 0
-		totalMessages := 0
-
-		claudePath := filepath.Join(home, ".claude", "projects")
-		if pathExists(claudePath) {
-			sessions, messages := indexClaudeCode(claudePath)
-			totalSessions += sessions
-			totalMessages += messages
-		}
-
-		claudeTranscripts := filepath.Join(home, ".claude", "transcripts")
-		if pathExists(claudeTranscripts) {
-			sessions, messages := indexClaudeCode(claudeTranscripts)
-			totalSessions += sessions
-			totalMessages += messages
-		}
-
-		opencodePath := filepath.Join(home, ".local", "share", "opencode")
-		if pathExists(opencodePath) {
-			sessions, messages := indexOpencode(opencodePath)
-			totalSessions += sessions
-			totalMessages += messages
-		}
-
-		geminiSessionsPath := filepath.Join(home, ".gemini", "sessions")
-		if pathExists(geminiSessionsPath) {
-			sessions, messages := indexGeminiCLI(geminiSessionsPath)
-			totalSessions += sessions
-			totalMessages += messages
-		}
-
-		stats := tui.Stats{
-			Sessions:   totalSessions,
-			Messages:   totalMessages,
-			Projects:   5,
-			Days:       30,
-			TopProject: "PILAN-INTELLIGENCE-PRISM",
-			TopCount:   totalMessages / 2,
-		}
-
-		discoveries := []tui.Discovery{
-			{Project: "AI Conversations Indexed", Messages: totalMessages, Icon: "✨"},
-		}
-
-		return stats, discoveries
-	}
-
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error running onboarding: %v\n", err)
+	if err := db.InitDB(); err != nil {
+		fmt.Printf("Error initializing database: %v\n", err)
 		os.Exit(1)
 	}
+	defer db.CloseDB()
+
+	home, _ := os.UserHomeDir()
+	start := time.Now()
+
+	// Inline styles
+	cyan := lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8"))
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color("#4ade80"))
+
+	// ASCII art banner
+	banner := cyan.Render(`##     ## ##    ## ######## ##     ##  #######
+###   ### ###   ## ##       ###   ### ##     ##
+#### #### ####  ## ##       #### #### ##     ##
+## ### ## ## ## ## ######   ## ### ## ##     ##
+##     ## ##  #### ##       ##     ## ##     ##
+##     ## ##   ### ##       ##     ## ##     ##
+##     ## ##    ## ######## ##     ##  #######`)
+	fmt.Println()
+	fmt.Println(banner)
+	fmt.Printf("  %s\n", dim.Render("by Pilan"))
+	fmt.Println()
+	fmt.Printf("  First run — indexing recent history...\n\n")
+
+	// Brand colors per tool
+	brandColor := map[string]lipgloss.Style{
+		"Claude Code":       lipgloss.NewStyle().Foreground(lipgloss.Color("#da7756")),
+		"OpenCode":          lipgloss.NewStyle().Foreground(lipgloss.Color("#00dc82")),
+		"Gemini CLI":        lipgloss.NewStyle().Foreground(lipgloss.Color("#4285F4")),
+		"Cursor":            lipgloss.NewStyle().Foreground(lipgloss.Color("#CCCCCC")),
+		"Codex":             lipgloss.NewStyle().Foreground(lipgloss.Color("#10a37f")),
+		"Amp":               lipgloss.NewStyle().Foreground(lipgloss.Color("#F34E3F")),
+		"Kiro":              lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900")),
+		"Crush":             lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6EC7")),
+		"Antigravity":       lipgloss.NewStyle().Foreground(lipgloss.Color("#8AB4F8")),
+		"VS Code Extensions": lipgloss.NewStyle().Foreground(lipgloss.Color("#007ACC")),
+	}
+
+	// XDG config for Claude Code
+	xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
+	if xdgConfigHome == "" {
+		xdgConfigHome = filepath.Join(home, ".config")
+	}
+
+	type toolEntry struct {
+		name string
+		scan func() (int, int)
+	}
+
+	tools := []toolEntry{
+		{"Claude Code", func() (int, int) {
+			s, m := 0, 0
+			for _, p := range []string{
+				filepath.Join(home, ".claude", "projects"),
+				filepath.Join(xdgConfigHome, "claude", "projects"),
+				filepath.Join(home, ".claude", "transcripts"),
+			} {
+				if pathExists(p) {
+					a, b := indexClaudeCode(p)
+					s += a
+					m += b
+				}
+			}
+			return s, m
+		}},
+		{"OpenCode", func() (int, int) {
+			p := filepath.Join(home, ".local", "share", "opencode")
+			if pathExists(p) {
+				return indexOpencode(p)
+			}
+			return 0, 0
+		}},
+		{"Gemini CLI", func() (int, int) {
+			p := filepath.Join(home, ".gemini", "sessions")
+			if pathExists(p) {
+				return indexGeminiCLI(p)
+			}
+			return 0, 0
+		}},
+		{"Cursor", func() (int, int) {
+			p := filepath.Join(appSupportDir(home, "Cursor"), "User", "globalStorage", "state.vscdb")
+			if pathExists(p) {
+				return indexCursorGlobalStorage(p)
+			}
+			return 0, 0
+		}},
+		{"Codex", func() (int, int) {
+			p := filepath.Join(home, ".codex")
+			if pathExists(p) {
+				return indexCodex(p)
+			}
+			return 0, 0
+		}},
+		{"Amp", func() (int, int) {
+			p := filepath.Join(home, ".local", "share", "amp")
+			if pathExists(p) {
+				return indexAmp(p)
+			}
+			return 0, 0
+		}},
+		{"Kiro", func() (int, int) {
+			p := filepath.Join(appSupportDir(home, "Kiro"), "User", "globalStorage", "kiro.kiroagent", "workspace-sessions")
+			if pathExists(p) {
+				return indexKiro(p)
+			}
+			return 0, 0
+		}},
+		{"Crush", func() (int, int) {
+			s, m := 0, 0
+			crushPath := filepath.Join(home, ".crush", "crush.db")
+			if pathExists(crushPath) {
+				a, b := indexCrush(crushPath)
+				s += a
+				m += b
+			}
+			a, b := scanCrushPerProject(home, 0, 0)
+			s += a
+			m += b
+			return s, m
+		}},
+		{"Antigravity", func() (int, int) {
+			p := filepath.Join(home, ".gemini", "antigravity", "code_tracker", "active")
+			if pathExists(p) {
+				return indexAntigravityCodeTracker(p)
+			}
+			return 0, 0
+		}},
+		{"VS Code Extensions", func() (int, int) {
+			s, m := 0, 0
+			ides := []string{"Code", "Code - Insiders", "Cursor", "Windsurf", "VSCodium", "Antigravity", "Kiro", "Trae"}
+			exts := []struct{ ExtID, ToolName string }{
+				{"kilocode.kilo-code", "kilo-code"},
+				{"saoudrizwan.claude-dev", "cline"},
+				{"rooveterinaryinc.roo-cline", "roo-code"},
+			}
+			for _, ext := range exts {
+				for _, ide := range ides {
+					tasksPath := vscodeExtTasksPath(home, ide, ext.ExtID)
+					if pathExists(tasksPath) {
+						a, b := indexClineFamily(tasksPath, ext.ToolName)
+						s += a
+						m += b
+					}
+				}
+			}
+			return s, m
+		}},
+	}
+
+	totalSessions := 0
+	totalMessages := 0
+	toolCount := 0
+	spinFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+	for _, tool := range tools {
+		// Run scan in goroutine so we can animate the spinner
+		type scanResult struct{ s, m int }
+		ch := make(chan scanResult, 1)
+		scanFn := tool.scan
+		go func() {
+			s, m := scanFn()
+			ch <- scanResult{s, m}
+		}()
+
+		// Resolve brand color for this tool (fallback to cyan)
+		toolStyle, ok := brandColor[tool.name]
+		if !ok {
+			toolStyle = cyan
+		}
+		styledName := toolStyle.Render(fmt.Sprintf("%-22s", tool.name))
+
+		// Animate spinner while scan runs
+		ticker := time.NewTicker(80 * time.Millisecond)
+		frame := 0
+		fmt.Printf("  %s %s scanning...", cyan.Render(spinFrames[0]), styledName)
+
+		var r scanResult
+	waitLoop:
+		for {
+			select {
+			case r = <-ch:
+				ticker.Stop()
+				break waitLoop
+			case <-ticker.C:
+				frame++
+				fmt.Printf("\033[2K\r  %s %s scanning...",
+					cyan.Render(spinFrames[frame%len(spinFrames)]), styledName)
+			}
+		}
+
+		if r.s > 0 {
+			fmt.Printf("\033[2K\r  %s %s %s   %s\n",
+				green.Render("✓"), styledName,
+				cyan.Render(fmt.Sprintf("%d sessions", r.s)),
+				dim.Render(fmt.Sprintf("%d messages", r.m)))
+			totalSessions += r.s
+			totalMessages += r.m
+			toolCount++
+		} else {
+			fmt.Printf("\033[2K\r  %s %s %s\n",
+				dim.Render("-"), styledName, dim.Render("not found"))
+		}
+	}
+
+	elapsed := time.Since(start)
+	fmt.Println()
+	fmt.Printf("  %s | %s | %d tools | %s\n",
+		cyan.Render(fmt.Sprintf("%d sessions", totalSessions)),
+		cyan.Render(fmt.Sprintf("%d messages", totalMessages)),
+		toolCount,
+		dim.Render(fmt.Sprintf("%.1fs", elapsed.Seconds())))
+
+	_ = populateProjectsFromSessions()
+	_ = db.ClassifyProjects()
+
+	// Surface discoveries from indexed data
+	gold := lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b"))
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b")).Bold(true)
+
+	type discovery struct {
+		label  string
+		detail string
+		score  float64
+	}
+
+	var discoveries []discovery
+
+	// Longest session in the last 30 days
+	var longestMsgs int
+	var longestTool, longestProject, longestQuery string
+	row := db.GetDB().QueryRow(`
+		SELECT message_count, tool, COALESCE(working_directory, project, ''), COALESCE(first_query, '')
+		FROM sessions
+		WHERE message_count > 0
+		ORDER BY message_count DESC LIMIT 1`)
+	if row.Scan(&longestMsgs, &longestTool, &longestProject, &longestQuery) == nil && longestMsgs > 10 {
+		detail := fmt.Sprintf("%d messages", longestMsgs)
+		if longestProject != "" {
+			parts := strings.Split(longestProject, "/")
+			detail += " in " + parts[len(parts)-1]
+		}
+		detail += " (" + longestTool + ")"
+		discoveries = append(discoveries, discovery{
+			label:  "Longest session",
+			detail: detail,
+			score:  math.Log(float64(longestMsgs)),
+		})
+	}
+
+	// Most-discussed project in the last 30 days
+	var topProject string
+	var topProjectSessions, topProjectMsgs int
+	row = db.GetDB().QueryRow(`
+		SELECT COALESCE(working_directory, project) as proj,
+		       COUNT(*) as sess, SUM(message_count) as msgs
+		FROM sessions
+		WHERE proj != ''
+		GROUP BY proj
+		ORDER BY msgs DESC LIMIT 1`)
+	if row.Scan(&topProject, &topProjectSessions, &topProjectMsgs) == nil && topProjectSessions > 1 {
+		parts := strings.Split(topProject, "/")
+		projName := parts[len(parts)-1]
+		discoveries = append(discoveries, discovery{
+			label:  "Most discussed",
+			detail: fmt.Sprintf("%s — %d sessions, %d messages", projName, topProjectSessions, topProjectMsgs),
+			score:  math.Log(float64(topProjectMsgs)) * 1.5,
+		})
+	}
+
+	// Busiest day in the last 30 days
+	var busiestDay string
+	var busiestSessions, busiestMsgs int
+	row = db.GetDB().QueryRow(`
+		SELECT date(COALESCE(start_time, indexed_at)) as day,
+		       COUNT(*) as sess, SUM(message_count) as msgs
+		FROM sessions
+		WHERE day IS NOT NULL
+		GROUP BY day
+		ORDER BY msgs DESC LIMIT 1`)
+	if row.Scan(&busiestDay, &busiestSessions, &busiestMsgs) == nil && busiestSessions > 2 {
+		discoveries = append(discoveries, discovery{
+			label:  "Busiest day",
+			detail: fmt.Sprintf("%s — %d sessions, %d messages", busiestDay, busiestSessions, busiestMsgs),
+			score:  math.Log(float64(busiestMsgs)) * 0.8,
+		})
+	}
+
+	// Tool distribution (if multiple tools found)
+	if toolCount >= 2 {
+		var toolDist []string
+		rows, err := db.GetDB().Query(`
+			SELECT tool, COUNT(*) as sess
+			FROM sessions
+			GROUP BY tool
+			ORDER BY sess DESC LIMIT 3`)
+		if err == nil {
+			for rows.Next() {
+				var t string
+				var s int
+				if rows.Scan(&t, &s) == nil {
+					toolDist = append(toolDist, fmt.Sprintf("%s (%d)", t, s))
+				}
+			}
+			rows.Close()
+			if len(toolDist) >= 2 {
+				discoveries = append(discoveries, discovery{
+					label:  "Tool mix",
+					detail: strings.Join(toolDist, ", "),
+					score:  float64(len(toolDist)) * 1.2,
+				})
+			}
+		}
+	}
+
+	// Show top 3 discoveries by score
+	if len(discoveries) > 0 {
+		// Sort by score descending
+		for i := 0; i < len(discoveries); i++ {
+			for j := i + 1; j < len(discoveries); j++ {
+				if discoveries[j].score > discoveries[i].score {
+					discoveries[i], discoveries[j] = discoveries[j], discoveries[i]
+				}
+			}
+		}
+		if len(discoveries) > 3 {
+			discoveries = discoveries[:3]
+		}
+
+		fmt.Println()
+		fmt.Printf("  %s\n", dim.Render("From the last 30 days:"))
+		for _, d := range discoveries {
+			fmt.Printf("  %s %s %s\n",
+				gold.Render("◆"),
+				dim.Render(d.label+":"),
+				accent.Render(d.detail))
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+
+	// Clear cutoff for any subsequent operations
+	indexCutoff = time.Time{}
+
+	// Y/n prompt for plugin install
+	fmt.Println()
+	fmt.Printf("Install mnemo plugins for your AI tools? [Y/n] ")
+	reader := bufio.NewReader(os.Stdin)
+	answer, _ := reader.ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer == "" || answer == "y" || answer == "yes" {
+		results := runInstallPlugins(home)
+		for _, r := range results {
+			fmt.Println(r)
+		}
+	}
+
+	// Spawn full index in background for complete history
+	fmt.Println()
+	if exe, err := os.Executable(); err == nil {
+		bgCmd := exec.Command(exe, "index")
+		bgCmd.Stdout = nil
+		bgCmd.Stderr = nil
+		bgCmd.Stdin = nil
+		if bgCmd.Start() == nil {
+			// Write .indexing status file
+			mnemoDir := filepath.Join(home, ".mnemo")
+			indexingPath := filepath.Join(mnemoDir, ".indexing")
+			indexingData, _ := json.Marshal(map[string]interface{}{
+				"pid":     bgCmd.Process.Pid,
+				"started": time.Now().Format(time.RFC3339),
+			})
+			_ = os.WriteFile(indexingPath, indexingData, 0644)
+			_ = bgCmd.Process.Release()
+
+			fmt.Printf("Full history indexing in background.\n")
+			fmt.Printf("  Check progress: %s\n", cyan.Render("mnemo status"))
+		}
+	}
+	fmt.Println()
 }
 
 func indexCustomPath(customPath, format string) (int, int) {
@@ -2137,17 +700,17 @@ func indexCustomPath(customPath, format string) (int, int) {
 		return indexAmp(customPath)
 	case "gemini":
 		return indexGeminiCLI(customPath)
-	case "cline", "kilo", "roo":
-		return indexClineFamily(customPath, format)
 	case "kiro":
 		return indexKiro(customPath)
 	case "antigravity":
 		return indexAntigravityCodeTracker(customPath)
 	case "crush":
 		return indexCrush(customPath)
+	case "cline", "kilo", "kilo-code", "roo", "roo-code":
+		return indexClineFamily(customPath, format)
 	default:
 		fmt.Printf("Unknown format: %s\n", format)
-		fmt.Println("Supported formats: claude, opencode, codex, amp, gemini, cline, kilo, roo, kiro, antigravity, crush")
+		fmt.Println("Supported formats: claude, opencode, cursor, codex, amp, gemini, kiro, antigravity, crush, cline, kilo, roo")
 		return 0, 0
 	}
 }
@@ -2194,44 +757,6 @@ func populateProjectsFromSessions() error {
 	}
 
 	return nil
-}
-
-func scanCrushPerProject(home string, sessions, messages int) (int, int) {
-	enabledProjects, err := db.GetEnabledProjects()
-	if err != nil || len(enabledProjects) == 0 {
-		projectsPath := filepath.Join(home, "Projects")
-		if pathExists(projectsPath) {
-			_ = filepath.Walk(projectsPath, func(path string, info os.FileInfo, err error) error {
-				if err != nil {
-					return nil
-				}
-				if info.Name() == "crush.db" && strings.Contains(path, ".crush") {
-					s, m := indexCrush(path)
-					sessions += s
-					messages += m
-				}
-				return nil
-			})
-		}
-		return sessions, messages
-	}
-
-	scannedPaths := make(map[string]bool)
-	for _, project := range enabledProjects {
-		crushDB := filepath.Join(project.Path, ".crush", "crush.db")
-		if scannedPaths[crushDB] {
-			continue
-		}
-		scannedPaths[crushDB] = true
-
-		if pathExists(crushDB) {
-			s, m := indexCrush(crushDB)
-			sessions += s
-			messages += m
-		}
-	}
-
-	return sessions, messages
 }
 
 func init() {

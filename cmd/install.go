@@ -1,5 +1,12 @@
 package cmd
 
+// install.go sets up mnemo integrations for AI coding tools:
+//
+//   - Claude Code: Installs a skill at ~/.claude/skills/mnemo/ that auto-activates
+//     on context-related keywords
+//   - Claude Desktop: Adds mnemo as an MCP server in claude_desktop_config.json
+//   - OpenCode: Installs a plugin that injects mnemo context during session compaction
+
 import (
 	"encoding/json"
 	"fmt"
@@ -29,82 +36,18 @@ directly in Claude Desktop.`,
 		fmt.Println("Installing mnemo plugins and MCP server...")
 		fmt.Println()
 
-		// Find mnemo binary path
-		mnemoPath, err := exec.LookPath("mnemo")
-		if err != nil {
-			// Try common locations
-			possiblePaths := []string{
-				filepath.Join(home, "bin", "mnemo"),
-				filepath.Join(home, ".local", "bin", "mnemo"),
-				"/usr/local/bin/mnemo",
-				"/opt/homebrew/bin/mnemo",
-			}
-			for _, p := range possiblePaths {
-				if _, err := os.Stat(p); err == nil {
-					mnemoPath = p
-					break
-				}
-			}
-		}
-		if mnemoPath == "" {
-			fmt.Println("  ⚠ Could not find mnemo binary. MCP server config will use 'mnemo' (must be in PATH)")
-			mnemoPath = "mnemo"
-		}
-
-		// Install Claude Code skill
-		claudeSkillDir := filepath.Join(home, ".claude", "skills", "mnemo")
-		if err := os.MkdirAll(claudeSkillDir, 0755); err != nil {
-			fmt.Printf("  ✗ Claude Code Skill: Failed to create directory: %v\n", err)
-		} else {
-			skillPath := filepath.Join(claudeSkillDir, "SKILL.md")
-			if err := os.WriteFile(skillPath, []byte(claudeCodeSkill), 0644); err != nil {
-				fmt.Printf("  ✗ Claude Code Skill: Failed to write skill: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ Claude Code Skill: %s\n", claudeSkillDir)
-			}
-		}
-
-		// Install MCP server config for Claude Desktop
-		var claudeDesktopConfigDir string
-		if runtime.GOOS == "darwin" {
-			claudeDesktopConfigDir = filepath.Join(home, "Library", "Application Support", "Claude")
-		} else if runtime.GOOS == "windows" {
-			claudeDesktopConfigDir = filepath.Join(os.Getenv("APPDATA"), "Claude")
-		} else {
-			claudeDesktopConfigDir = filepath.Join(home, ".config", "claude")
-		}
-
-		configPath := filepath.Join(claudeDesktopConfigDir, "claude_desktop_config.json")
-		if err := installMCPConfig(configPath, mnemoPath); err != nil {
-			fmt.Printf("  ✗ Claude Desktop MCP: %v\n", err)
-		} else {
-			fmt.Printf("  ✓ Claude Desktop MCP: %s\n", configPath)
-		}
-
-		// Install OpenCode plugin
-		opencodePluginDir := filepath.Join(home, ".config", "opencode", "plugins", "mnemo")
-		if err := os.MkdirAll(opencodePluginDir, 0755); err != nil {
-			fmt.Printf("  ✗ OpenCode: Failed to create directory: %v\n", err)
-		} else {
-			pluginPath := filepath.Join(opencodePluginDir, "mnemo-plugin.ts")
-			pkgPath := filepath.Join(opencodePluginDir, "package.json")
-
-			if err := os.WriteFile(pluginPath, []byte(opencodePlugin), 0644); err != nil {
-				fmt.Printf("  ✗ OpenCode: Failed to write plugin: %v\n", err)
-			} else if err := os.WriteFile(pkgPath, []byte(opencodePackageJSON), 0644); err != nil {
-				fmt.Printf("  ✗ OpenCode: Failed to write package.json: %v\n", err)
-			} else {
-				fmt.Printf("  ✓ OpenCode: %s\n", opencodePluginDir)
-			}
+		results := runInstallPlugins(home)
+		for _, r := range results {
+			fmt.Println(r)
 		}
 
 		fmt.Println()
 		fmt.Println("Installation complete!")
 		fmt.Println()
 		fmt.Println("Features enabled:")
-		fmt.Println("  • Claude Code: Skill auto-activates on context keywords")
-		fmt.Println("  • Claude Desktop: MCP tools (mnemo_search, mnemo_context, mnemo_recent)")
-		fmt.Println("  • OpenCode: Context survives session compaction")
+		fmt.Println("  - Claude Code: Skill auto-activates on context keywords")
+		fmt.Println("  - Claude Desktop: MCP tools (mnemo_search, mnemo_context, mnemo_recent)")
+		fmt.Println("  - OpenCode: Context survives session compaction")
 		fmt.Println()
 		fmt.Println("Note: Restart Claude Desktop to activate MCP server.")
 	},
@@ -153,6 +96,66 @@ func installMCPConfig(configPath, mnemoPath string) error {
 	}
 
 	return nil
+}
+
+// runInstallPlugins installs all mnemo integrations and returns result strings.
+// Used by both the install command and onboarding.
+func runInstallPlugins(home string) []string {
+	var results []string
+
+	mnemoPath, err := exec.LookPath("mnemo")
+	if err != nil {
+		for _, p := range []string{
+			filepath.Join(home, "bin", "mnemo"),
+			filepath.Join(home, ".local", "bin", "mnemo"),
+			"/usr/local/bin/mnemo",
+			"/opt/homebrew/bin/mnemo",
+		} {
+			if _, err := os.Stat(p); err == nil {
+				mnemoPath = p
+				break
+			}
+		}
+	}
+	if mnemoPath == "" {
+		mnemoPath = "mnemo"
+	}
+
+	// Claude Code skill
+	claudeSkillDir := filepath.Join(home, ".claude", "skills", "mnemo")
+	if err := os.MkdirAll(claudeSkillDir, 0755); err == nil {
+		skillPath := filepath.Join(claudeSkillDir, "SKILL.md")
+		if err := os.WriteFile(skillPath, []byte(claudeCodeSkill), 0644); err == nil {
+			results = append(results, "  ✓ Claude Code skill installed")
+		}
+	}
+
+	// MCP server for Claude Desktop
+	var claudeDesktopConfigDir string
+	if runtime.GOOS == "darwin" {
+		claudeDesktopConfigDir = filepath.Join(home, "Library", "Application Support", "Claude")
+	} else if runtime.GOOS == "windows" {
+		claudeDesktopConfigDir = filepath.Join(os.Getenv("APPDATA"), "Claude")
+	} else {
+		claudeDesktopConfigDir = filepath.Join(home, ".config", "claude")
+	}
+	configPath := filepath.Join(claudeDesktopConfigDir, "claude_desktop_config.json")
+	if err := installMCPConfig(configPath, mnemoPath); err == nil {
+		results = append(results, "  ✓ MCP server configured")
+	}
+
+	// OpenCode plugin
+	opencodePluginDir := filepath.Join(home, ".config", "opencode", "plugins", "mnemo")
+	if err := os.MkdirAll(opencodePluginDir, 0755); err == nil {
+		pluginPath := filepath.Join(opencodePluginDir, "mnemo-plugin.ts")
+		pkgPath := filepath.Join(opencodePluginDir, "package.json")
+		if os.WriteFile(pluginPath, []byte(opencodePlugin), 0644) == nil &&
+			os.WriteFile(pkgPath, []byte(opencodePackageJSON), 0644) == nil {
+			results = append(results, "  ✓ OpenCode plugin installed")
+		}
+	}
+
+	return results
 }
 
 func init() {

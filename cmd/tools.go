@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/spf13/cobra"
 )
 
+// AITool describes a supported AI coding assistant and the filesystem path
+// where it stores conversation history.
 type AITool struct {
 	Name     string
 	Path     string
@@ -15,18 +18,57 @@ type AITool struct {
 	Detected bool
 }
 
-var supportedTools = []AITool{
-	{Name: "Claude Code", Path: "~/.claude/projects", Format: "jsonl"},
-	{Name: "Opencode", Path: "~/.opencode", Format: "jsonl"},
-	{Name: "Cursor", Path: "~/.cursor", Format: "sqlite"},
-	{Name: "Gemini CLI", Path: "~/.gemini", Format: "json"},
-	{Name: "Windsurf", Path: "~/.windsurf", Format: "json"},
-	{Name: "Aider", Path: "~/.aider.chat.history.md", Format: "markdown"},
-	{Name: "GitHub Copilot", Path: "~/.config/github-copilot", Format: "json"},
-	{Name: "Roo Code", Path: "~/.roo", Format: "json"},
-	{Name: "Kilo Code", Path: "~/.kilo", Format: "json"},
-	{Name: "Amp", Path: "~/.amp", Format: "json"},
-	{Name: "Cline", Path: "~/.cline", Format: "json"},
+// appSupportDir returns the OS-specific application support directory for an app.
+// macOS: ~/Library/Application Support/{app}
+// Linux: ~/.config/{app}
+// Windows: %APPDATA%/{app}
+func appSupportDir(home, app string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", app)
+	case "windows":
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, app)
+		}
+		return filepath.Join(home, "AppData", "Roaming", app)
+	default: // linux, freebsd, etc.
+		return filepath.Join(home, ".config", app)
+	}
+}
+
+func getSupportedTools(home string) []AITool {
+	return []AITool{
+		{Name: "Claude Code", Path: filepath.Join(home, ".claude", "projects"), Format: "jsonl"},
+		{Name: "Opencode", Path: filepath.Join(home, ".local", "share", "opencode"), Format: "json"},
+		{Name: "Cursor", Path: filepath.Join(appSupportDir(home, "Cursor"), "User", "globalStorage"), Format: "sqlite"},
+		{Name: "Gemini CLI", Path: filepath.Join(home, ".gemini", "sessions"), Format: "json"},
+		{Name: "Windsurf", Path: appSupportDir(home, "Windsurf"), Format: "sqlite"},
+		{Name: "Aider", Path: filepath.Join(home, ".aider.chat.history.md"), Format: "markdown"},
+		{Name: "GitHub Copilot", Path: filepath.Join(home, ".config", "github-copilot"), Format: "json"},
+		{Name: "Crush", Path: filepath.Join(home, ".crush", "crush.db"), Format: "sqlite"},
+		{Name: "Amp", Path: filepath.Join(home, ".local", "share", "amp"), Format: "jsonl"},
+		{Name: "Codex", Path: filepath.Join(home, ".codex"), Format: "jsonl"},
+		{Name: "Antigravity", Path: appSupportDir(home, "Antigravity"), Format: "sqlite"},
+		{Name: "Kiro", Path: appSupportDir(home, "Kiro"), Format: "sqlite"},
+	}
+}
+
+var vscodeExtensions = []struct {
+	Name  string
+	ExtID string
+}{
+	{Name: "Kilo Code", ExtID: "kilocode.kilo-code"},
+	{Name: "Cline", ExtID: "saoudrizwan.claude-dev"},
+	{Name: "Roo Code", ExtID: "rooveterinaryinc.roo-cline"},
+}
+
+var vscodeIDEs = []string{
+	"Code", "Code - Insiders", "Cursor", "Windsurf", "VSCodium", "Antigravity", "Kiro", "Trae",
+}
+
+// vscodeExtTasksPath returns the path to a VS Code extension's tasks directory for a given IDE.
+func vscodeExtTasksPath(home, ide, extID string) string {
+	return filepath.Join(appSupportDir(home, ide), "User", "globalStorage", extID, "tasks")
 }
 
 var toolsCmd = &cobra.Command{
@@ -35,27 +77,49 @@ var toolsCmd = &cobra.Command{
 	Long:  "Scan your system for AI coding assistants and show which ones have conversation history available.",
 	Run: func(cmd *cobra.Command, args []string) {
 		home, _ := os.UserHomeDir()
-		
+		tools := getSupportedTools(home)
+
 		fmt.Println("Scanning for AI coding tools...")
 		fmt.Println()
-		
+
 		detected := 0
-		for _, tool := range supportedTools {
-			path := expandPath(tool.Path, home)
-			exists := pathExists(path)
-			
+		for _, tool := range tools {
+			exists := pathExists(tool.Path)
+
 			status := "✗"
 			if exists {
 				status = "✓"
 				detected++
 			}
-			
+
 			fmt.Printf("  %s  %-20s %s\n", status, tool.Name, tool.Path)
 		}
-		
+
 		fmt.Println()
-		fmt.Printf("Detected: %d/%d tools\n", detected, len(supportedTools))
-		
+		fmt.Println("VS Code Extensions (scanning all IDEs):")
+		for _, ext := range vscodeExtensions {
+			foundIn := []string{}
+			for _, ide := range vscodeIDEs {
+				tasksPath := vscodeExtTasksPath(home, ide, ext.ExtID)
+				if pathExists(tasksPath) {
+					foundIn = append(foundIn, ide)
+				}
+			}
+
+			status := "✗"
+			location := "(not found)"
+			if len(foundIn) > 0 {
+				status = "✓"
+				detected++
+				location = fmt.Sprintf("(%s)", joinStrings(foundIn, ", "))
+			}
+
+			fmt.Printf("  %s  %-20s %s\n", status, ext.Name, location)
+		}
+
+		fmt.Println()
+		fmt.Printf("Detected: %d tools\n", detected)
+
 		if detected > 0 {
 			fmt.Println()
 			fmt.Println("Run 'mnemo index' to index all detected tools.")
@@ -63,16 +127,20 @@ var toolsCmd = &cobra.Command{
 	},
 }
 
-func expandPath(path, home string) string {
-	if len(path) > 0 && path[0] == '~' {
-		return filepath.Join(home, path[1:])
-	}
-	return path
-}
-
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func joinStrings(strs []string, sep string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	result := strs[0]
+	for i := 1; i < len(strs); i++ {
+		result += sep + strs[i]
+	}
+	return result
 }
 
 func init() {

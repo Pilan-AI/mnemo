@@ -1,13 +1,10 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"time"
 
+	"github.com/Pilan-AI/mnemo/internal/db"
 	"github.com/spf13/cobra"
 )
 
@@ -18,59 +15,50 @@ var recentCmd = &cobra.Command{
 	Short: "Show recent AI coding sessions",
 	Long:  "List your most recent AI coding conversations across all tools.",
 	Run: func(cmd *cobra.Command, args []string) {
-		home, _ := os.UserHomeDir()
-		mnemoDir := filepath.Join(home, ".mnemo")
-
-		// Load Claude index
-		indexPath := filepath.Join(mnemoDir, "claude-index.json")
-		if !pathExists(indexPath) {
-			fmt.Println("No index found. Run 'mnemo index' first.")
+		if err := db.InitDB(); err != nil {
+			fmt.Printf("Error opening database: %v\n", err)
+			fmt.Println("Run 'mnemo index' first to build the search index.")
 			return
 		}
+		defer db.CloseDB()
 
-		data, err := os.ReadFile(indexPath)
+		sessions, err := db.GetRecentSessions(50)
 		if err != nil {
-			fmt.Printf("Error reading index: %v\n", err)
+			fmt.Printf("Error getting sessions: %v\n", err)
 			return
 		}
 
-		var index []map[string]interface{}
-		if err := json.Unmarshal(data, &index); err != nil {
-			fmt.Printf("Error parsing index: %v\n", err)
-			os.Exit(1)
+		if len(sessions) == 0 {
+			fmt.Println("No sessions found. Run 'mnemo index' first.")
+			return
 		}
 
-		// Sort by indexed time (most recent first)
-		sort.Slice(index, func(i, j int) bool {
-			ti, _ := time.Parse(time.RFC3339, index[i]["indexed"].(string))
-			tj, _ := time.Parse(time.RFC3339, index[j]["indexed"].(string))
-			return ti.After(tj)
-		})
-
-		// Filter by days if specified
 		cutoff := time.Now().AddDate(0, 0, -recentDays)
 
 		fmt.Printf("Recent sessions (last %d days):\n\n", recentDays)
 
 		count := 0
-		for _, entry := range index {
-			if recentDays > 0 {
-				indexed, _ := time.Parse(time.RFC3339, entry["indexed"].(string))
-				if indexed.Before(cutoff) {
-					continue
-				}
+		for _, session := range sessions {
+			indexedAt, ok := session["indexedAt"].(time.Time)
+			if !ok {
+				continue
 			}
 
-			project := entry["project"].(string)
-			messages := int(entry["messages"].(float64))
+			if recentDays > 0 && indexedAt.Before(cutoff) {
+				continue
+			}
+
+			project := session["project"].(string)
+			messages := session["messages"].(int)
+			tool := session["tool"].(string)
 			firstQuery := ""
-			if fq, ok := entry["firstQuery"].(string); ok {
+			if fq, ok := session["firstQuery"].(string); ok {
 				firstQuery = fq
 			}
 
-			fmt.Printf("• %s (%d messages)\n", project, messages)
+			fmt.Printf("[%s] %s (%d messages)\n", tool, project, messages)
 			if firstQuery != "" {
-				fmt.Printf("  └─ %s\n", truncate(firstQuery, 70))
+				fmt.Printf("       %s\n", truncate(firstQuery, 70))
 			}
 
 			count++

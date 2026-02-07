@@ -1,13 +1,16 @@
 package cmd
 
+// context.go generates a markdown summary of recent work on a project.
+// Output is designed to be piped into a file and loaded into a new AI session:
+//
+//   mnemo context PILAN > CONTEXT.md
+
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/Pilan-AI/mnemo/internal/db"
 	"github.com/spf13/cobra"
 )
 
@@ -20,40 +23,39 @@ Pipe this to a file to load context into your next AI session.
 Example:
   mnemo context PILAN > CONTEXT.md`,
 	Run: func(cmd *cobra.Command, args []string) {
-		home, _ := os.UserHomeDir()
-		mnemoDir := filepath.Join(home, ".mnemo")
-
 		projectFilter := ""
 		if len(args) > 0 {
 			projectFilter = strings.ToLower(args[0])
 		}
 
-		// Load Claude index
-		indexPath := filepath.Join(mnemoDir, "claude-index.json")
-		if !pathExists(indexPath) {
-			fmt.Fprintln(os.Stderr, "No index found. Run 'mnemo index' first.")
+		if err := db.InitDB(); err != nil {
+			fmt.Printf("Error opening database: %v\n", err)
+			fmt.Println("Run 'mnemo index' first to build the search index.")
+			return
+		}
+		defer db.CloseDB()
+
+		sessions, err := db.GetRecentSessions(50)
+		if err != nil {
+			fmt.Printf("Error fetching sessions: %v\n", err)
 			return
 		}
 
-		data, _ := os.ReadFile(indexPath)
-		var index []map[string]interface{}
-		if err := json.Unmarshal(data, &index); err != nil {
-			fmt.Printf("Error parsing index: %v\n", err)
-			os.Exit(1)
-		}
-
-		// Filter and collect relevant sessions
+		// Filter by project if specified
 		var relevant []map[string]interface{}
-		for _, entry := range index {
-			project := entry["project"].(string)
+		for _, s := range sessions {
+			project, _ := s["project"].(string)
 			if projectFilter != "" && !strings.Contains(strings.ToLower(project), projectFilter) {
 				continue
 			}
-			relevant = append(relevant, entry)
+			relevant = append(relevant, s)
 		}
 
 		if len(relevant) == 0 {
-			fmt.Fprintln(os.Stderr, "No matching sessions found.")
+			fmt.Println("No matching sessions found.")
+			if projectFilter != "" {
+				fmt.Printf("No sessions match project filter '%s'.\n", projectFilter)
+			}
 			return
 		}
 
@@ -77,15 +79,14 @@ Example:
 				break
 			}
 
-			project := entry["project"].(string)
-			messages := int(entry["messages"].(float64))
-			firstQuery := ""
-			if fq, ok := entry["firstQuery"].(string); ok {
-				firstQuery = fq
-			}
+			project, _ := entry["project"].(string)
+			msgCount, _ := entry["messages"].(int)
+			firstQuery, _ := entry["firstQuery"].(string)
+			tool, _ := entry["tool"].(string)
 
 			fmt.Printf("### %s\n", project)
-			fmt.Printf("- Messages: %d\n", messages)
+			fmt.Printf("- Tool: %s\n", tool)
+			fmt.Printf("- Messages: %d\n", msgCount)
 			if firstQuery != "" {
 				fmt.Printf("- Initial query: %s\n", truncate(firstQuery, 200))
 			}
