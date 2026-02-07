@@ -22,7 +22,7 @@ func setupTestDB(t *testing.T) func() {
 	var openErr error
 	db, openErr = sql.Open("sqlite", dbPath)
 	if openErr != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to open database: %v", openErr)
 	}
 
@@ -84,14 +84,14 @@ func setupTestDB(t *testing.T) func() {
 	`
 
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
-		os.RemoveAll(tmpDir)
+		_ = db.Close()
+		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to create schema: %v", err)
 	}
 
 	return func() {
-		db.Close()
-		os.RemoveAll(tmpDir)
+		_ = db.Close()
+		_ = os.RemoveAll(tmpDir)
 	}
 }
 

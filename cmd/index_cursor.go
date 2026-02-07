@@ -13,13 +13,13 @@ func indexCursorGlobalStorage(dbPath string) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	defer sqliteDB.Close()
+	defer func() { _ = sqliteDB.Close() }()
 
 	rows, err := sqliteDB.Query("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'")
 	if err != nil {
 		return 0, 0
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type ComposerData struct {
 		Version      int    `json:"_v"`

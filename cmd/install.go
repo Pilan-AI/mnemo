@@ -132,11 +132,12 @@ func runInstallPlugins(home string) []string {
 
 	// MCP server for Claude Desktop
 	var claudeDesktopConfigDir string
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		claudeDesktopConfigDir = filepath.Join(home, "Library", "Application Support", "Claude")
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		claudeDesktopConfigDir = filepath.Join(os.Getenv("APPDATA"), "Claude")
-	} else {
+	default:
 		claudeDesktopConfigDir = filepath.Join(home, ".config", "claude")
 	}
 	configPath := filepath.Join(claudeDesktopConfigDir, "claude_desktop_config.json")

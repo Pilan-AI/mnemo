@@ -65,7 +65,7 @@ func (b SessionBlock) ProjectedTokens() int {
 		return b.TotalTokens()
 	}
 	rate := b.TokensPerMinute()
-	remainingMins := b.EndTime.Sub(time.Now()).Minutes()
+	remainingMins := time.Until(b.EndTime).Minutes()
 	if remainingMins < 0 {
 		remainingMins = 0
 	}
@@ -78,7 +78,7 @@ func (b SessionBlock) ProjectedCost() float64 {
 		return b.CostUSD
 	}
 	rate := b.CostPerHour() / 60 // per minute
-	remainingMins := b.EndTime.Sub(time.Now()).Minutes()
+	remainingMins := time.Until(b.EndTime).Minutes()
 	if remainingMins < 0 {
 		remainingMins = 0
 	}
@@ -90,7 +90,7 @@ func (b SessionBlock) RemainingTime() time.Duration {
 	if !b.IsActive {
 		return 0
 	}
-	remaining := b.EndTime.Sub(time.Now())
+	remaining := time.Until(b.EndTime)
 	if remaining < 0 {
 		return 0
 	}

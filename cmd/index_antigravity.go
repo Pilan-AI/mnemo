@@ -37,7 +37,7 @@ func indexAntigravitySession(jsonlPath string) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	sessionID := filepath.Base(jsonlPath)
 	sessionID = strings.TrimSuffix(sessionID, ".jsonl")

@@ -250,11 +250,12 @@ func indexCodexSessionJSONL(sessionPath string) (int, int) {
 				}
 
 				var role string
-				if msgType == "user_message" {
+				switch msgType {
+				case "user_message":
 					role = "user"
-				} else if msgType == "agent_message" {
+				case "agent_message":
 					role = "assistant"
-				} else {
+				default:
 					continue
 				}
 

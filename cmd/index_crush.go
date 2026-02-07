@@ -18,7 +18,7 @@ func indexCrush(dbPath string) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	defer crushDB.Close()
+	defer func() { _ = crushDB.Close() }()
 
 	rows, err := crushDB.Query(`
 		SELECT s.id, s.title, m.role, m.parts, m.created_at, m.model, m.provider
@@ -29,7 +29,7 @@ func indexCrush(dbPath string) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	sessionMsgCounts := make(map[string]int)
 	sessionFirstMsg := make(map[string]string)
@@ -121,7 +121,7 @@ func indexCrush(dbPath string) (int, int) {
 	sessionStats := make(map[string]crushSessionStats)
 	statsRows, statsErr := crushDB.Query(`SELECT id, prompt_tokens, completion_tokens, cost FROM sessions`)
 	if statsErr == nil {
-		defer statsRows.Close()
+		defer func() { _ = statsRows.Close() }()
 		for statsRows.Next() {
 			var sid string
 			var pt, ct int

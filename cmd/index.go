@@ -611,7 +611,7 @@ func runOnboarding() {
 					toolDist = append(toolDist, fmt.Sprintf("%s (%d)", t, s))
 				}
 			}
-			rows.Close()
+			_ = rows.Close()
 			if len(toolDist) >= 2 {
 				discoveries = append(discoveries, discovery{
 					label:  "Tool mix",

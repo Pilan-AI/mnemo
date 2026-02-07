@@ -82,7 +82,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/v1/messages/", s.handleMessages)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok","mnemo":"active"}`)
+		_, _ = fmt.Fprintf(w, `{"status":"ok","mnemo":"active"}`)
 	})
 	mux.HandleFunc("/stats", s.handleStats)
 
@@ -105,7 +105,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read request", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req ClaudeRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -132,7 +132,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Mnemo-Tracked", "true")
-	w.Write(rawBody)
+	_, _ = w.Write(rawBody)
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +150,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (s *Server) trackTokenUsage(resp *ClaudeResponse, model string) {
@@ -308,7 +308,7 @@ func (s *Server) forwardToUpstream(req *ClaudeRequest) (*ClaudeResponse, []byte,
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

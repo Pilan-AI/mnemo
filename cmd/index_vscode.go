@@ -10,6 +10,9 @@ import (
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// Ensure these are available for future Windsurf wiring.
+var _ = indexVSCodeAIChat
+
 // extractVSCodeUserContent extracts user content from VS Code-style chat bubbles
 // (used by Windsurf and other VS Code-based IDEs)
 func extractVSCodeUserContent(initText, richText, rawText string) string {
@@ -88,7 +91,7 @@ func indexVSCodeWorkspace(dbPath, workspaceID, toolName string) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	defer sqliteDB.Close()
+	defer func() { _ = sqliteDB.Close() }()
 
 	var chatDataJSON string
 	row := sqliteDB.QueryRow("SELECT value FROM ItemTable WHERE key='workbench.panel.aichat.view.aichat.chatdata'")
@@ -143,16 +146,17 @@ func indexVSCodeWorkspace(dbPath, workspaceID, toolName string) (int, int) {
 		for _, bubble := range tab.Bubbles {
 			var role, content string
 
-			if bubble.Type == "user" {
+			switch bubble.Type {
+			case "user":
 				role = "user"
 				content = extractVSCodeUserContent(bubble.InitText, bubble.RichText, bubble.RawText)
-			} else if bubble.Type == "ai" {
+			case "ai":
 				role = "assistant"
 				content = bubble.Text
 				if content == "" {
 					content = bubble.RawText
 				}
-			} else {
+			default:
 				continue
 			}
 
