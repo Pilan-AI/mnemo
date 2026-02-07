@@ -2,7 +2,7 @@
 
 **Instant local search and indexing across all your AI coding sessions.**
 
-I'm an average Claude Code and OpenCode user. When I ran the numbers, I had 89,037 messages sitting across my AI coding tools. While organizing those chats, I realized they weren't just conversations — they were my 'decision journals'. Why I picked one architecture over another, how I debugged that weird race condition at 2am, what trade-offs I accepted and why. All of it scattered across 12 different tools in 5 different formats.
+Hi all! I'm Raghu. I'm an average Claude Code and OpenCode user. When I ran the numbers, I had 89,037 messages sitting across my AI coding tools. While organizing those chats, I realized they weren't just conversations — they were my 'decision journals'. Why I picked one architecture over another, how I debugged that weird race condition at 2am, what trade-offs I accepted and why. All of it scattered across 12 different tools in 5 different formats.
 
 So I built mnemo. It indexes everything into one local SQLite database and gives you full-text search across all of it. No cloud, no accounts, everything stays on your machine.
 
@@ -19,7 +19,7 @@ go install github.com/Pilan-AI/mnemo@latest
 ## Quick start
 
 ```bash
-# First run — interactive onboarding that finds your tools
+# First run — scans your tools, indexes recent history
 mnemo index
 
 # Search across everything
@@ -53,7 +53,24 @@ mnemo reads the native storage format of each tool directly. No exports, no copy
 | Cline | JSON | VS Code extension `tasks/ui_messages.json` |
 | Roo Code | JSON | VS Code extension `tasks/ui_messages.json` |
 
-Windsurf, Aider, and GitHub Copilot support coming soon.
+## Search
+
+mnemo search groups results by session, not by message. When you search for "liquid design," you get the 5 most relevant sessions — not 10 scattered messages that may all come from the same conversation.
+
+```bash
+# Session-grouped results with highlighted snippets
+mnemo search "liquid design"
+
+# Token-efficient format for AI context injection
+mnemo search "auth flow" --context
+
+# Full JSON for programmatic use
+mnemo search "auth flow" --json
+```
+
+Results are ranked using a composite score that combines full-text relevance (BM25) with temporal decay — recent sessions naturally surface above older ones. Sessions with more matching messages score higher, and your own messages are weighted above assistant responses, since what you asked reveals more about intent than what the AI answered.
+
+The `--context` flag produces a compact format designed for injection into AI coding sessions. Five results in ~250 tokens instead of ~2,000.
 
 ## Plugins
 
@@ -85,28 +102,25 @@ Adds mnemo as an MCP tool inside OpenCode. Search and context commands available
 For Claude Desktop, Cursor, and other MCP-compatible clients:
 
 ```bash
-mnemo serve
+mnemo install
 ```
 
-Exposes four tools: `mnemo_search`, `mnemo_context`, `mnemo_recent`, `mnemo_tools`.
+This configures your MCP client to launch mnemo automatically. Restart the client after installing. The MCP server exposes four tools: `mnemo_search`, `mnemo_context`, `mnemo_recent`, `mnemo_tools`.
 
-```bash
-# Or install the MCP config directly
-mnemo install mcp
-```
+Search results delivered through MCP use the same session-grouped ranking as the CLI but formatted for minimal token usage — your AI assistant gets maximum context in minimum space.
 
 ## Commands
 
 | Command | What it does |
 |---------|-------------|
 | `mnemo index` | Index all detected AI tool sessions |
-| `mnemo search <query>` | Full-text search with BM25 ranking |
+| `mnemo search <query>` | Session-grouped search with intelligent ranking |
 | `mnemo recent` | Show recent sessions (default: 7 days) |
 | `mnemo context <project>` | Generate project context summary |
+| `mnemo status` | Show database stats and background index status |
 | `mnemo tools` | List detected AI tools and session counts |
 | `mnemo blocks` | Show 5-hour usage blocks with token burn rates |
 | `mnemo projects` | Manage tracked project directories |
-| `mnemo serve` | Start MCP server |
 | `mnemo install` | Install plugins and MCP config |
 | `mnemo add <path>` | Index a custom path |
 
@@ -153,8 +167,8 @@ mnemo install mcp
 
 1. `mnemo index` scans each tool's native storage (JSONL, SQLite, JSON)
 2. Messages are normalized into `~/.mnemo/mnemo.db` — a single SQLite file with FTS5 full-text search
-3. `mnemo search` runs BM25-ranked queries across all indexed content
-4. Results return matched snippets with project name, tool, model, and session context
+3. `mnemo search` groups results by session and ranks them using BM25 relevance, recency weighting, match density, and role preference
+4. Results adapt to the consumer — compact cards for humans, token-efficient summaries for AI context, full JSON for programmatic access
 
 The database is a single file. Back it up, move it between machines, query it with any SQLite client.
 
@@ -171,9 +185,9 @@ Built with pure-Go SQLite ([modernc.org/sqlite](https://pkg.go.dev/modernc.org/s
 grep searches text. mnemo searches **sessions**.
 
 - grep can't parse 12 different formats (JSONL, SQLite, JSON) into meaningful conversations
-- grep doesn't rank results by relevance (mnemo uses BM25)
+- grep doesn't rank results by relevance or weight recent sessions above old ones
 - grep doesn't know that a Claude Code JSONL file and a Cursor SQLite database contain the same kind of data
-- grep gives you matching lines; mnemo gives you snippets with project, tool, and session context
+- grep gives you matching lines; mnemo gives you the right session with project, tool, and time context
 
 If you use one tool and remember exact strings, grep works. If you use multiple tools and want to find "that auth discussion from last week," you need mnemo.
 
@@ -199,7 +213,9 @@ MIT. See [LICENSE](./LICENSE).
 
 [GitHub](https://github.com/Pilan-AI/mnemo) · [X](https://x.com/Pilan_AI) · [Pilan](https://pilan.ai)
 
-Built by [@0xraghu](https://x.com/Pilan_AI)
+Built by 0xRaghu
+
+[LinkedIn](https://linkedin.com/in/0xRaghu) | [X](https://x.com/Pilan_AI)
 
 ---
 

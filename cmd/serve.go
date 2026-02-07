@@ -17,21 +17,17 @@ import (
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start mnemo MCP server",
-	Long: `Start mnemo as an MCP (Model Context Protocol) server.
+	Short: "Start mnemo MCP server (used internally by MCP clients)",
+	Long: `Start mnemo as an MCP (Model Context Protocol) server over stdio.
 
-This allows Claude Desktop and other MCP clients to search your indexed
-conversations directly through the MCP protocol.
+This command is launched automatically by MCP clients like Claude Desktop
+and Cursor. You do not need to run it manually.
 
-Add to your Claude Desktop config:
-  {
-    "mcpServers": {
-      "mnemo": {
-        "command": "mnemo",
-        "args": ["serve"]
-      }
-    }
-  }`,
+To set up MCP integration, run:
+  mnemo install
+
+This writes the config that tells your MCP client to launch mnemo serve
+on demand. Restart your MCP client after installing.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := serveMCP(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
