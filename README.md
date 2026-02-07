@@ -235,8 +235,8 @@ Built by 0xRaghu
 
 <div align="center">
 
-*எண்ணென்ப ஏனை எழுத்தென்ப — இவ்விரண்டும்*
-*கண்ணென்ப வாழும் உயிர்க்கு.*
+*எண்ணென்ப ஏனை எழுத்தென்ப இவ்விரண்டும்*
+*- கண்ணென்ப வாழும் உயிர்க்கு.*
 
 Numbers and letters — these two
 are the eyes of all who live.
