@@ -7,19 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for v1.2.0
+### Planned
+- Hybrid search with vector similarity
+- Markdown export for Git-friendly backups
+- Thinking block extraction for reasoning analysis
 
-#### Search Improvements (OpenClaw Learnings)
-- **Hybrid Search**: Combine FTS5 with vector similarity (`finalScore = 0.7 * vectorScore + 0.3 * bm25Score`)
-- **Embedding Cache**: Cache chunk embeddings in SQLite, skip re-embedding unchanged content
-- **Schema Versioning**: Add `schema_version` field for forward compatibility
+---
 
-#### Export & Backup
-- **Markdown Export**: `mnemo export --format markdown` for Git-friendly backups
-- **Thinking Content**: Extract and store `thinking` blocks separately for reasoning analysis
+## [1.2.0] - 2026-02-07
 
-#### Curated Layer
-- **MEMORY.md equivalent**: Distilled insights from conversations (manual curation support)
+### Added
+- **Intelligent search**: Session-grouped results ranked by BM25 relevance, temporal decay, match density, and user-message preference
+- **Three output tiers**: `--context` for token-efficient AI injection (~250 tokens for 5 results), `--json` for structured programmatic access, default compact cards for humans
+- **Inline onboarding**: Replaces Bubble Tea TUI with brew-install-style output that persists in scrollback, per-tool brand colors, and post-scan discoveries
+- **New tool support**: Codex, Amp, Kiro, Antigravity, Cline, Kilo Code, Roo Code, Crush
+- **`mnemo status`** command showing database stats and background index status
+- **`mnemo blocks`** command for 5-hour usage blocks with token burn rates
+- **`mnemo projects`** command for tracked directory management
+- **Projects TUI** for interactive directory management
+- **MCP server** uses session-grouped search with token-efficient formatting
+
+### Changed
+- Modularized codebase: 12 per-tool adapter files, domain-specific db files
+- Search default limit reduced from 10 to 5 sessions (higher quality results)
+- MCP `mnemo_search` and `mnemo_context` now return session-level results instead of raw messages
+- Snippet extraction prefers user messages over assistant responses
+- `first_query` cleaned of XML tags, system directives, and noise patterns
+
+### Fixed
+- Flexible timestamp parsing for mixed Go/SQLite date formats
+- FTS5 snippet delimiters no longer consumed by XML tag stripping
+- Removed unused dependencies (bubbles, yaml)
+- Resolved all linting errors
+
+### Performance
+- Composite scoring formula: `(BM25 - density_bonus - user_bonus) * exp(-0.03 * days_old)`
+- 85% token reduction for MCP context injection
 
 ---
 
@@ -61,5 +84,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Initial public release
 
+[1.2.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.0.0
