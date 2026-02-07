@@ -126,43 +126,57 @@ Search results delivered through MCP use the same session-grouped ranking as the
 
 ## How it works
 
-```
-┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-│ Claude Code │ │  OpenCode   │ │ Gemini CLI  │ │   Cursor    │  + 8 more
-│   (JSONL)   │ │   (JSON)    │ │   (JSON)    │ │  (SQLite)   │
-└──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
-       │               │               │               │
-       └───────────────┴───────┬───────┴───────────────┘
-                               │
-                               ▼
-                  ┌────────────────────────┐
-                  │      mnemo index       │
-                  │                        │
-                  │  auto-detect tools     │
-                  │  parse native formats  │
-                  │  normalize + dedupe    │
-                  └───────────┬────────────┘
-                              │
-                              ▼
-                  ┌────────────────────────┐
-                  │   ~/.mnemo/mnemo.db    │
-                  │                        │
-                  │  SQLite + FTS5 index   │
-                  │  sessions · messages   │
-                  │  projects · tokens     │
-                  └──┬────┬────┬─────┬─────┘
-                     │    │    │     │
-                     ▼    ▼    ▼     ▼
-                  search  ·  context · recent · serve
-                  (BM25)    (project)  (days)   (MCP)
-                     │    │    │     │
-                     ▼    ▼    ▼     ▼
-                  ┌────────────────────────┐
-                  │  Claude Code plugin    │
-                  │  OpenCode plugin       │
-                  │  MCP clients (Cursor,  │
-                  │  Claude Desktop, etc.) │
-                  └────────────────────────┘
+```mermaid
+graph TD
+    subgraph inputs["Data Sources — 12 AI Tools"]
+        direction LR
+        jsonl["JSONL<br/><small>Claude Code · Cursor<br/>Cline · Roo Code · Kilo Code</small>"]
+        json["JSON<br/><small>Gemini CLI · OpenCode<br/>Codex · Amp · Crush</small>"]
+        custom["Custom<br/><small>Kiro · Antigravity</small>"]
+    end
+
+    subgraph indexer["mnemo index"]
+        detect["Auto-detect tools"]
+        parse["Parse native formats"]
+        dedupe["Session matching<br/>+ deduplication"]
+        normalize["Timestamp normalization"]
+    end
+
+    subgraph db["~/.mnemo/mnemo.db — SQLite + FTS5"]
+        bm25["BM25 + Temporal Decay"]
+        grouping["Session Grouping"]
+        userweight["User-Message Preference (2x)"]
+        density["Match Density Bonus"]
+    end
+
+    jsonl --> indexer
+    json --> indexer
+    custom --> indexer
+    detect --> parse --> dedupe --> normalize
+
+    indexer --> db
+
+    db --> cli["CLI<br/><small>Session-grouped cards</small>"]
+    db --> mcp["MCP Server<br/><small>Auto-context injection</small>"]
+    db --> pilan["Pilan.app<br/><small>Full inference pipeline</small>"]
+
+    mcp --> cc["Claude Code Plugin"]
+    mcp --> oc["OpenCode (Skills + Hooks)"]
+    mcp --> clients["Cursor · Claude Desktop"]
+
+    style inputs fill:#0a1628,stroke:#00D9FF30,color:#e8ecf1
+    style indexer fill:#0a1628,stroke:#00D9FF40,color:#e8ecf1
+    style db fill:#0a1628,stroke:#5855E640,color:#e8ecf1
+    style jsonl fill:#00D9FF15,stroke:#00D9FF40,color:#00D9FF
+    style json fill:#10B98115,stroke:#10B98140,color:#10B981
+    style custom fill:#FF950A15,stroke:#FF950A40,color:#FF950A
+    style cli fill:#00D9FF10,stroke:#00D9FF30,color:#00D9FF
+    style mcp fill:#5855E610,stroke:#5855E630,color:#5855E6
+    style pilan fill:#8E3ED310,stroke:#8E3ED330,color:#8E3ED3
+    style bm25 fill:#0a162800,stroke:#5855E620,color:#aab4c2
+    style grouping fill:#0a162800,stroke:#5855E620,color:#aab4c2
+    style userweight fill:#0a162800,stroke:#5855E620,color:#aab4c2
+    style density fill:#0a162800,stroke:#5855E620,color:#aab4c2
 ```
 
 1. `mnemo index` scans each tool's native storage (JSONL, SQLite, JSON)
