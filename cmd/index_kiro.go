@@ -1,14 +1,19 @@
+// index_kiro.go indexes Kiro IDE sessions stored as JSON files.
+// Sessions live under ~/Library/Application Support/Kiro/workspace-sessions/.
 package cmd
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// indexKiro walks the Kiro workspace-sessions directory and indexes each
+// session's JSON file. Returns total (sessions, messages) indexed.
 func indexKiro(workspaceSessionsPath string) (int, int) {
 	workspaceDirs, err := os.ReadDir(workspaceSessionsPath)
 	if err != nil {
@@ -36,6 +41,10 @@ func indexKiro(workspaceSessionsPath string) (int, int) {
 			if info, err := os.Stat(sessionFile); err == nil && skipOldFile(info) {
 				continue
 			}
+			fileSessionID := strings.TrimSuffix(filepath.Base(sessionFile), ".json")
+			if info, err := os.Stat(sessionFile); err == nil && isSessionUnchanged(fileSessionID, info.ModTime()) {
+				continue
+			}
 
 			s, m := indexKiroSession(sessionFile)
 			totalSessions += s
@@ -46,6 +55,8 @@ func indexKiro(workspaceSessionsPath string) (int, int) {
 	return totalSessions, totalMessages
 }
 
+// indexKiroSession parses a single Kiro workspace session JSON file and
+// inserts all messages atomically within a transaction.
 func indexKiroSession(sessionPath string) (int, int) {
 	data, err := os.ReadFile(sessionPath)
 	if err != nil {
@@ -89,6 +100,29 @@ func indexKiroSession(sessionPath string) (int, int) {
 		sessionProvider = inferProviderFromModel(sessionModel)
 	}
 
+	if session.SessionID == "" {
+		return 0, 0
+	}
+
+	// Use file modification time as fallback timestamp (more accurate than time.Now())
+	fileModTime := time.Now()
+	if info, err := os.Stat(sessionPath); err == nil {
+		fileModTime = info.ModTime()
+	}
+
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, session.SessionID); err != nil {
+		indexErrors++
+		return 0, 0
+	}
+
+	var firstUserMsg string
 	messagesIndexed := 0
 	for _, h := range session.History {
 		var content string
@@ -116,32 +150,51 @@ func indexKiroSession(sessionPath string) (int, int) {
 			continue
 		}
 
-		err := db.InsertMessage(db.Message{
+		if role == "user" && firstUserMsg == "" {
+			firstUserMsg = truncate(content, 200)
+		}
+
+		err := db.TxInsertMessage(tx, db.Message{
 			SessionID: session.SessionID,
 			Role:      role,
 			Content:   content,
 			Project:   projectName,
 			Tool:      "kiro",
-			Timestamp: time.Now(),
+			Timestamp: fileModTime,
 			Model:     sessionModel,
 			Provider:  sessionProvider,
 		})
-		if err == nil {
-			messagesIndexed++
+		if err != nil {
+			indexErrors++
+			continue
 		}
+		messagesIndexed++
 	}
 
 	if messagesIndexed > 0 {
-		_ = db.InsertSession(db.Session{
+		sessionQuery := firstUserMsg
+		if sessionQuery == "" {
+			sessionQuery = session.Title
+		}
+		if err := db.TxInsertSession(tx, db.Session{
 			ID:           session.SessionID,
 			Project:      projectName,
-			FirstQuery:   session.Title,
+			FirstQuery:   sessionQuery,
 			MessageCount: messagesIndexed,
 			Tool:         "kiro",
 			FilePath:     sessionPath,
 			Model:        sessionModel,
 			Provider:     sessionProvider,
-		})
+			StartTime:    fileModTime,
+			EndTime:      fileModTime,
+		}); err != nil {
+			indexErrors++
+			return 0, messagesIndexed
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, messagesIndexed
+		}
 		return 1, messagesIndexed
 	}
 

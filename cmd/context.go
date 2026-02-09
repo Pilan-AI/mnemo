@@ -42,10 +42,9 @@ Example:
 		}
 
 		// Filter by project if specified
-		var relevant []map[string]interface{}
+		var relevant []db.RecentSession
 		for _, s := range sessions {
-			project, _ := s["project"].(string)
-			if projectFilter != "" && !strings.Contains(strings.ToLower(project), projectFilter) {
+			if projectFilter != "" && !strings.Contains(strings.ToLower(s.Project), projectFilter) {
 				continue
 			}
 			relevant = append(relevant, s)
@@ -79,16 +78,11 @@ Example:
 				break
 			}
 
-			project, _ := entry["project"].(string)
-			msgCount, _ := entry["messages"].(int)
-			firstQuery, _ := entry["firstQuery"].(string)
-			tool, _ := entry["tool"].(string)
-
-			fmt.Printf("### %s\n", project)
-			fmt.Printf("- Tool: %s\n", tool)
-			fmt.Printf("- Messages: %d\n", msgCount)
-			if firstQuery != "" {
-				fmt.Printf("- Initial query: %s\n", truncate(firstQuery, 200))
+			fmt.Printf("### %s\n", entry.Project)
+			fmt.Printf("- Tool: %s\n", entry.Tool)
+			fmt.Printf("- Messages: %d\n", entry.MessageCount)
+			if entry.FirstQuery != "" {
+				fmt.Printf("- Initial query: %s\n", truncate(entry.FirstQuery, 200))
 			}
 			fmt.Println()
 		}

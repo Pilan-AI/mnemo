@@ -1,3 +1,4 @@
+// onboarding.go provides the first-run setup experience for new mnemo users.
 package cmd
 
 import (

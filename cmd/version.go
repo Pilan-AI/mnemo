@@ -1,3 +1,5 @@
+// version.go prints build-time version information. Variables are overridden
+// via -ldflags during goreleaser builds.
 package cmd
 
 import (
@@ -8,8 +10,8 @@ import (
 
 // Build-time variables, overridden via -ldflags during goreleaser builds.
 var (
-	Version   = "1.2.0"
-	BuildDate = "2026-02-07"
+	Version   = "1.3.0"
+	BuildDate = "2026-02-08"
 	GitCommit = "dev"
 )
 

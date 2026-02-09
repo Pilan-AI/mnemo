@@ -1,3 +1,5 @@
+// index_amp.go indexes Amp CLI sessions from ~/.local/share/amp/.
+// Supports threads/ directory containing individual JSON conversation files.
 package cmd
 
 import (
@@ -33,6 +35,10 @@ func indexAmp(basePath string) (int, int) {
 		if info, err := threadFile.Info(); err == nil && skipOldFile(info) {
 			continue
 		}
+		fileSessionID := strings.TrimSuffix(threadFile.Name(), ".json")
+		if info, err := threadFile.Info(); err == nil && isSessionUnchanged(fileSessionID, info.ModTime()) {
+			continue
+		}
 
 		threadPath := filepath.Join(threadsPath, threadFile.Name())
 		s, m := indexAmpThread(threadPath)
@@ -43,6 +49,8 @@ func indexAmp(basePath string) (int, int) {
 	return totalSessions, totalMessages
 }
 
+// indexAmpThread parses a single Amp thread JSON file and inserts all
+// messages atomically within a transaction.
 func indexAmpThread(threadPath string) (int, int) {
 	data, err := os.ReadFile(threadPath)
 	if err != nil {
@@ -168,6 +176,18 @@ func indexAmpThread(threadPath string) (int, int) {
 	var firstUserMsg string
 	msgCount := 0
 
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+		indexErrors++
+		return 0, 0
+	}
+
 	for _, msg := range thread.Messages {
 		var content string
 		var msgProvider string
@@ -212,7 +232,7 @@ func indexAmpThread(threadPath string) (int, int) {
 			msgProvider = sessionProvider
 		}
 
-		err := db.InsertMessage(db.Message{
+		err := db.TxInsertMessage(tx, db.Message{
 			SessionID:    sessionID,
 			Project:      projectName,
 			Role:         msg.Role,
@@ -233,7 +253,7 @@ func indexAmpThread(threadPath string) (int, int) {
 	}
 
 	if msgCount > 0 {
-		_ = db.InsertSession(db.Session{
+		if err := db.TxInsertSession(tx, db.Session{
 			ID:                sessionID,
 			Project:           projectName,
 			FirstQuery:        firstUserMsg,
@@ -245,7 +265,14 @@ func indexAmpThread(threadPath string) (int, int) {
 			TotalInputTokens:  totalInputTokens,
 			TotalOutputTokens: totalOutputTokens,
 			TotalCostUSD:      totalCredits,
-		})
+		}); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
 		return 1, msgCount
 	}
 

@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-02-08
+
+### Added
+- **Transaction support**: All indexers now use atomic transactions — a session either fully indexes or rolls back, preventing partial writes on interruption
+- **Typed return structs**: `RecentSession`, `UsageStats`, `ToolUsageSummary`, `ModelUsageSummary` replace raw `map[string]interface{}` returns
+- **Scan error logging**: All `rows.Scan` failures across the db layer now emit `log.Printf` diagnostics instead of silently continuing
+- **Comprehensive godoc**: File-level comments, exported function/type docs across all packages (~95% coverage)
+
+### Changed
+- **`execer` interface**: Database functions accept `execer` (shared by `*sql.DB` and `*sql.Tx`) enabling both direct and transactional calls
+- `InsertSession` / `InsertMessage` now have `Tx` variants for use within transactions
+- Updated AGENTS.md with v1.3.0 patterns, transaction examples, and complete file inventory
+
+### Fixed
+- 50 bugs identified through comprehensive QA audit: error handling, `rows.Err()` checks, type assertion safety, temporal decay edge cases, UTC normalization, transaction atomicity, streaming JSONL parser resilience, HTTP status forwarding in proxy
+
+---
+
 ## [1.2.0] - 2026-02-07
 
 ### Added
@@ -84,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Initial public release
 
+[1.3.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.0.0

@@ -44,10 +44,14 @@ Available modes:
 		}
 		mode := strings.ToLower(args[0])
 
-		homeDir, _ := os.UserHomeDir()
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error: cannot determine home directory: %v\n", err)
+			os.Exit(1)
+		}
 		mnemoDir := filepath.Join(homeDir, ".mnemo")
 
-		if err := os.MkdirAll(mnemoDir, 0755); err != nil {
+		if err := os.MkdirAll(mnemoDir, 0700); err != nil {
 			fmt.Printf("Error creating config directory: %v\n", err)
 			os.Exit(1)
 		}
@@ -96,7 +100,10 @@ Your AI coding sessions — indexed, searchable, never forgotten.`,
 		}
 
 		// First run: trigger onboarding if no database exists
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
 		dbPath := filepath.Join(home, ".mnemo", "mnemo.db")
 		if !pathExists(dbPath) {
 			runOnboarding()

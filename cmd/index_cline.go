@@ -1,3 +1,6 @@
+// index_cline.go indexes Cline, Roo Code, and Kilo Code sessions.
+// These VS Code extensions share the same task-based JSON format, stored
+// under each extension's globalStorage directory per IDE.
 package cmd
 
 import (
@@ -9,6 +12,8 @@ import (
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// indexClineFamily walks the tasks directory for a Cline-family extension
+// and indexes each task's ui_messages.json. Returns total (sessions, messages) indexed.
 func indexClineFamily(tasksPath, toolName string) (int, int) {
 	taskDirs, err := os.ReadDir(tasksPath)
 	if err != nil {
@@ -26,6 +31,11 @@ func indexClineFamily(tasksPath, toolName string) (int, int) {
 			continue
 		}
 
+		taskID := taskDir.Name()
+		if info, err := taskDir.Info(); err == nil && isSessionUnchanged(taskID, info.ModTime()) {
+			continue
+		}
+
 		taskPath := filepath.Join(tasksPath, taskDir.Name())
 		uiMessagesPath := filepath.Join(taskPath, "ui_messages.json")
 
@@ -33,7 +43,7 @@ func indexClineFamily(tasksPath, toolName string) (int, int) {
 			continue
 		}
 
-		s, m := indexClineTask(uiMessagesPath, taskDir.Name(), toolName)
+		s, m := indexClineTask(uiMessagesPath, taskID, toolName)
 		totalSessions += s
 		totalMessages += m
 	}
@@ -41,6 +51,8 @@ func indexClineFamily(tasksPath, toolName string) (int, int) {
 	return totalSessions, totalMessages
 }
 
+// indexClineTask parses a single Cline/Roo/Kilo task's ui_messages.json
+// and inserts all messages atomically within a transaction.
 func indexClineTask(uiMessagesPath, taskID, toolName string) (int, int) {
 	data, err := os.ReadFile(uiMessagesPath)
 	if err != nil {
@@ -75,6 +87,18 @@ func indexClineTask(uiMessagesPath, taskID, toolName string) (int, int) {
 	// Track pending API request tokens to attach to the next assistant message
 	var pendingInputTokens, pendingOutputTokens, pendingCacheRead, pendingCacheWrite int
 	var pendingCost float64
+
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, taskID); err != nil {
+		indexErrors++
+		return 0, 0
+	}
 
 	for _, msg := range uiMessages {
 		if msg.Say == "api_req_started" && msg.Text != "" {
@@ -151,7 +175,7 @@ func indexClineTask(uiMessagesPath, taskID, toolName string) (int, int) {
 			pendingCost = 0
 		}
 
-		err := db.InsertMessage(db.Message{
+		err := db.TxInsertMessage(tx, db.Message{
 			SessionID:        taskID,
 			Project:          projectName,
 			Role:             role,
@@ -173,7 +197,7 @@ func indexClineTask(uiMessagesPath, taskID, toolName string) (int, int) {
 	}
 
 	if msgCount > 0 {
-		_ = db.InsertSession(db.Session{
+		if err := db.TxInsertSession(tx, db.Session{
 			ID:                taskID,
 			Project:           projectName,
 			FirstQuery:        firstUserMsg,
@@ -186,7 +210,14 @@ func indexClineTask(uiMessagesPath, taskID, toolName string) (int, int) {
 			TotalCacheRead:    totalCacheRead,
 			TotalCacheWrite:   totalCacheWrite,
 			TotalCostUSD:      totalCost,
-		})
+		}); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
 		return 1, msgCount
 	}
 

@@ -1,3 +1,6 @@
+// index_codex.go indexes OpenAI Codex CLI sessions from ~/.codex/.
+// Supports two sources: history.jsonl (grouped by session) and individual
+// JSONL files in sessions/ and archived_sessions/ directories.
 package cmd
 
 import (
@@ -28,7 +31,7 @@ func indexCodex(basePath string) (int, int) {
 		}
 		foundSessions = true
 
-		_ = filepath.Walk(sessionsPath, func(path string, info os.FileInfo, err error) error {
+		if err := filepath.Walk(sessionsPath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -47,7 +50,9 @@ func indexCodex(basePath string) (int, int) {
 			}
 
 			return nil
-		})
+		}); err != nil {
+			indexErrors++
+		}
 	}
 
 	if !foundSessions {
@@ -61,6 +66,8 @@ func indexCodex(basePath string) (int, int) {
 	return totalSessions, totalMessages
 }
 
+// indexCodexHistory parses the Codex history.jsonl file, grouping entries by
+// session ID and inserting each session atomically using a closure pattern.
 func indexCodexHistory(historyPath string) (int, int) {
 	data, err := os.ReadFile(historyPath)
 	if err != nil {
@@ -113,39 +120,63 @@ func indexCodexHistory(historyPath string) (int, int) {
 	totalMessages := 0
 
 	for sessionID, messages := range sessionMessages {
-		var firstUserMsg string
-		msgCount := 0
-
-		for _, msg := range messages {
-			if firstUserMsg == "" {
-				firstUserMsg = truncate(msg.content, 200)
-			}
-
-			err := db.InsertMessage(db.Message{
-				SessionID: sessionID,
-				Project:   "codex",
-				Role:      msg.role,
-				Content:   msg.content,
-				Timestamp: msg.timestamp,
-				Tool:      "codex",
-			})
+		s, m := func() (int, int) {
+			tx, err := db.BeginTx()
 			if err != nil {
 				indexErrors++
-				continue
+				return 0, 0
 			}
-			msgCount++
-		}
+			defer func() { _ = tx.Rollback() }()
 
-		if msgCount > 0 {
-			_ = db.InsertSessionSimple(sessionID, "codex", firstUserMsg, historyPath, "codex", msgCount)
-			totalSessions++
-			totalMessages += msgCount
-		}
+			if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+				indexErrors++
+				return 0, 0
+			}
+
+			var firstUserMsg string
+			msgCount := 0
+			for _, msg := range messages {
+				if firstUserMsg == "" {
+					firstUserMsg = truncate(msg.content, 200)
+				}
+
+				err := db.TxInsertMessage(tx, db.Message{
+					SessionID: sessionID,
+					Project:   "codex",
+					Role:      msg.role,
+					Content:   msg.content,
+					Timestamp: msg.timestamp,
+					Tool:      "codex",
+				})
+				if err != nil {
+					indexErrors++
+					continue
+				}
+				msgCount++
+			}
+
+			if msgCount > 0 {
+				if err := db.TxInsertSessionSimple(tx, sessionID, "codex", firstUserMsg, historyPath, "codex", msgCount); err != nil {
+					indexErrors++
+					return 0, msgCount
+				}
+				if err := tx.Commit(); err != nil {
+					indexErrors++
+					return 0, msgCount
+				}
+				return 1, msgCount
+			}
+			return 0, 0
+		}()
+		totalSessions += s
+		totalMessages += m
 	}
 
 	return totalSessions, totalMessages
 }
 
+// indexCodexSessionJSONL parses a single Codex session JSONL file from the
+// sessions/ or archived_sessions/ directory and inserts atomically.
 func indexCodexSessionJSONL(sessionPath string) (int, int) {
 	data, err := os.ReadFile(sessionPath)
 	if err != nil {
@@ -302,18 +333,29 @@ func indexCodexSessionJSONL(sessionPath string) (int, int) {
 		sessionID = strings.TrimSuffix(filepath.Base(sessionPath), ".jsonl")
 	}
 
+	// Incremental check using the actual session ID
+	if info, err := os.Stat(sessionPath); err == nil && isSessionUnchanged(sessionID, info.ModTime()) {
+		return 0, 0
+	}
+
 	var firstUserMsg string
 	msgCount := 0
 
 	// Infer provider from model name if not already set
 	if sessionProvider == "" && sessionModel != "" {
-		if strings.Contains(sessionModel, "gpt") || strings.Contains(sessionModel, "o1") || strings.Contains(sessionModel, "o3") || strings.Contains(sessionModel, "codex") {
-			sessionProvider = "openai"
-		} else if strings.Contains(sessionModel, "claude") {
-			sessionProvider = "anthropic"
-		} else if strings.Contains(sessionModel, "gemini") || strings.Contains(sessionModel, "gemma") {
-			sessionProvider = "google"
-		}
+		sessionProvider = inferProviderFromModel(sessionModel)
+	}
+
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+		indexErrors++
+		return 0, 0
 	}
 
 	for _, msg := range messages {
@@ -321,7 +363,7 @@ func indexCodexSessionJSONL(sessionPath string) (int, int) {
 			firstUserMsg = truncate(msg.content, 200)
 		}
 
-		err := db.InsertMessage(db.Message{
+		err := db.TxInsertMessage(tx, db.Message{
 			SessionID:        sessionID,
 			Project:          "codex",
 			Role:             msg.role,
@@ -343,7 +385,7 @@ func indexCodexSessionJSONL(sessionPath string) (int, int) {
 	}
 
 	if msgCount > 0 {
-		_ = db.InsertSession(db.Session{
+		if err := db.TxInsertSession(tx, db.Session{
 			ID:                   sessionID,
 			Project:              "codex",
 			FirstQuery:           firstUserMsg,
@@ -357,7 +399,14 @@ func indexCodexSessionJSONL(sessionPath string) (int, int) {
 			TotalReasoningTokens: sessionTotalReasoning,
 			CLIVersion:           cliVersion,
 			WorkingDirectory:     cwd,
-		})
+		}); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
 		return 1, msgCount
 	}
 

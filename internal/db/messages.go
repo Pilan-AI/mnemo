@@ -1,6 +1,10 @@
+// messages.go handles message-level CRUD operations. Each message belongs to a
+// session and is stored with full metadata (role, content, tokens, cost).
+// Provides both direct (InsertMessage) and transactional (TxInsertMessage) variants.
 package db
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
@@ -29,8 +33,24 @@ type Message struct {
 	Date             string
 }
 
-func InsertMessage(msg Message) error {
-	result, err := db.Exec(`
+func deleteSessionMessages(ex execer, sessionID string) error {
+	_, err := ex.Exec("DELETE FROM messages WHERE session_id = ?", sessionID)
+	return err
+}
+
+// DeleteSessionMessages removes all messages for a session.
+// Must be called before re-indexing a session to prevent duplicates.
+func DeleteSessionMessages(sessionID string) error {
+	return deleteSessionMessages(db, sessionID)
+}
+
+// TxDeleteSessionMessages removes all messages for a session within a transaction.
+func TxDeleteSessionMessages(tx *sql.Tx, sessionID string) error {
+	return deleteSessionMessages(tx, sessionID)
+}
+
+func insertMessage(ex execer, msg Message) error {
+	result, err := ex.Exec(`
 		INSERT INTO messages (
 			session_id, project, role, content, timestamp, tool,
 			model, provider, input_tokens, output_tokens,
@@ -47,9 +67,22 @@ func InsertMessage(msg Message) error {
 		return err
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err2 := result.RowsAffected()
+	if err2 != nil {
+		return fmt.Errorf("failed to check rows affected: %w", err2)
+	}
 	if rows == 0 {
 		return fmt.Errorf("no rows inserted")
 	}
 	return nil
+}
+
+// InsertMessage inserts a single message record using the global DB connection.
+func InsertMessage(msg Message) error {
+	return insertMessage(db, msg)
+}
+
+// TxInsertMessage inserts a message within a transaction.
+func TxInsertMessage(tx *sql.Tx, msg Message) error {
+	return insertMessage(tx, msg)
 }

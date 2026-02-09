@@ -1,3 +1,5 @@
+// search.go implements the CLI search command with three output formats:
+// human (terminal-friendly), context (token-efficient for AI), and json (structured).
 package cmd
 
 import (
@@ -124,8 +126,8 @@ func printHumanFormat(query string, results []db.SessionMatch, startTime time.Ti
 		if r.Snippet != "" {
 			snippet := r.Snippet
 			// Replace FTS5 delimiters with ANSI first, then clean XML
-			snippet = strings.ReplaceAll(snippet, ">>>", "\033[1;33m")
-			snippet = strings.ReplaceAll(snippet, "<<<", "\033[0m")
+			snippet = strings.ReplaceAll(snippet, "⟪", "\033[1;33m")
+			snippet = strings.ReplaceAll(snippet, "⟫", "\033[0m")
 			snippet = xmlTagRe.ReplaceAllString(snippet, "")
 			snippet = strings.TrimSpace(snippet)
 			if snippet != "" {
@@ -185,7 +187,7 @@ func printJSONFormat(results []db.SessionMatch) {
 			StartTime:    r.StartTime,
 			MatchCount:   r.MatchCount,
 			Score:        math.Round(r.FinalScore*1000) / 1000,
-			Snippet:      strings.ReplaceAll(strings.ReplaceAll(r.Snippet, ">>>", ""), "<<<", ""),
+			Snippet:      strings.ReplaceAll(strings.ReplaceAll(r.Snippet, "⟪", ""), "⟫", ""),
 			SnippetRole:  r.SnippetRole,
 		}
 	}
@@ -218,8 +220,8 @@ func runRawSearch(query string, startTime time.Time) {
 		fmt.Printf("    Session: %s\n", r.SessionID)
 
 		snippet := r.Snippet
-		snippet = strings.ReplaceAll(snippet, ">>>", "\033[1;33m")
-		snippet = strings.ReplaceAll(snippet, "<<<", "\033[0m")
+		snippet = strings.ReplaceAll(snippet, "⟪", "\033[1;33m")
+		snippet = strings.ReplaceAll(snippet, "⟫", "\033[0m")
 		fmt.Printf("    Match: %s\n", snippet)
 		fmt.Printf("    Relevance: %.2f\n", r.Rank)
 		fmt.Println()

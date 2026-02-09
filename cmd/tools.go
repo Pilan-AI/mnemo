@@ -1,3 +1,5 @@
+// tools.go detects installed AI coding tools on the local system and provides
+// path helper functions for locating tool-specific session directories.
 package cmd
 
 import (
@@ -36,6 +38,7 @@ func appSupportDir(home, app string) string {
 	}
 }
 
+// getSupportedTools returns the full list of AI tools with their expected paths.
 func getSupportedTools(home string) []AITool {
 	return []AITool{
 		{Name: "Claude Code", Path: filepath.Join(home, ".claude", "projects"), Format: "jsonl"},
@@ -76,7 +79,11 @@ var toolsCmd = &cobra.Command{
 	Short: "List detected AI coding tools",
 	Long:  "Scan your system for AI coding assistants and show which ones have conversation history available.",
 	Run: func(cmd *cobra.Command, args []string) {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error: cannot determine home directory: %v\n", err)
+			return
+		}
 		tools := getSupportedTools(home)
 
 		fmt.Println("Scanning for AI coding tools...")
@@ -127,11 +134,13 @@ var toolsCmd = &cobra.Command{
 	},
 }
 
+// pathExists returns true if the given filesystem path exists.
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
+// joinStrings concatenates non-empty strings with the given separator.
 func joinStrings(strs []string, sep string) string {
 	if len(strs) == 0 {
 		return ""

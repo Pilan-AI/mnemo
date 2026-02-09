@@ -1,3 +1,6 @@
+// index_cursor.go indexes Cursor IDE sessions from its SQLite state database.
+// Cursor stores composer conversations in state.vscdb under the globalStorage
+// directory. Each composer session is indexed atomically using a closure pattern.
 package cmd
 
 import (
@@ -8,6 +11,9 @@ import (
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// indexCursorGlobalStorage opens the Cursor state.vscdb database, queries
+// composer conversations, and indexes each session atomically.
+// Returns total (sessions, messages) indexed.
 func indexCursorGlobalStorage(dbPath string) (int, int) {
 	sqliteDB, err := db.OpenReadOnlySQLite(dbPath)
 	if err != nil {
@@ -59,10 +65,7 @@ func indexCursorGlobalStorage(dbPath string) (int, int) {
 			projectName = "cursor-" + sessionID[:8]
 		}
 
-		var firstUserMsg string
 		var sessionStartTime, sessionEndTime time.Time
-		var totalInputTokens, totalOutputTokens int
-		msgCount := 0
 
 		if composer.CreatedAt > 0 {
 			sessionStartTime = time.UnixMilli(composer.CreatedAt)
@@ -71,91 +74,122 @@ func indexCursorGlobalStorage(dbPath string) (int, int) {
 			sessionEndTime = time.UnixMilli(composer.LastUpdated)
 		}
 
-		for _, bubble := range composer.Conversation {
-			bubbleKey := fmt.Sprintf("bubbleId:%s:%s", sessionID, bubble.BubbleID)
-			var bubbleValue []byte
-			row := sqliteDB.QueryRow("SELECT value FROM cursorDiskKV WHERE key=?", bubbleKey)
-			if err := row.Scan(&bubbleValue); err != nil {
-				continue
-			}
-
-			var bubbleData struct {
-				Type       int    `json:"type"`
-				Text       string `json:"text"`
-				TokenCount struct {
-					InputTokens  int `json:"inputTokens"`
-					OutputTokens int `json:"outputTokens"`
-				} `json:"tokenCount"`
-			}
-
-			if err := json.Unmarshal(bubbleValue, &bubbleData); err != nil {
-				continue
-			}
-
-			if bubbleData.Text == "" {
-				continue
-			}
-
-			role := "user"
-			if bubbleData.Type == 2 {
-				role = "assistant"
-			}
-
-			if role == "user" && firstUserMsg == "" {
-				firstUserMsg = truncate(bubbleData.Text, 200)
-			}
-
-			inputTokens := bubbleData.TokenCount.InputTokens
-			outputTokens := bubbleData.TokenCount.OutputTokens
-			totalInputTokens += inputTokens
-			totalOutputTokens += outputTokens
-
-			timestamp := sessionStartTime
-			if timestamp.IsZero() {
-				timestamp = time.Now()
-			}
-
-			err := db.InsertMessage(db.Message{
-				SessionID:    sessionID,
-				Project:      projectName,
-				Role:         role,
-				Content:      bubbleData.Text,
-				Timestamp:    timestamp,
-				Tool:         "cursor",
-				Provider:     "cursor",
-				InputTokens:  inputTokens,
-				OutputTokens: outputTokens,
-				Date:         timestamp.Format("2006-01-02"),
-			})
-			if err != nil {
+		s, m := func() (int, int) {
+			tx, txErr := db.BeginTx()
+			if txErr != nil {
 				indexErrors++
-				continue
+				return 0, 0
 			}
-			msgCount++
-		}
+			defer func() { _ = tx.Rollback() }()
 
-		if msgCount > 0 {
-			sessionDate := ""
-			if !sessionStartTime.IsZero() {
-				sessionDate = sessionStartTime.Format("2006-01-02")
+			if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+				indexErrors++
+				return 0, 0
 			}
-			_ = db.InsertSession(db.Session{
-				ID:                sessionID,
-				Project:           projectName,
-				FirstQuery:        firstUserMsg,
-				MessageCount:      msgCount,
-				Tool:              "cursor",
-				FilePath:          dbPath,
-				Provider:          "cursor",
-				TotalInputTokens:  totalInputTokens,
-				TotalOutputTokens: totalOutputTokens,
-				StartTime:         sessionStartTime,
-				EndTime:           sessionEndTime,
-				Date:              sessionDate,
-			})
-			totalSessions++
-			totalMessages += msgCount
-		}
+
+			localMsgCount := 0
+			localInputTokens := 0
+			localOutputTokens := 0
+			localFirstUserMsg := ""
+
+			for _, bubble := range composer.Conversation {
+				bubbleKey := fmt.Sprintf("bubbleId:%s:%s", sessionID, bubble.BubbleID)
+				var bubbleValue []byte
+				row := sqliteDB.QueryRow("SELECT value FROM cursorDiskKV WHERE key=?", bubbleKey)
+				if err := row.Scan(&bubbleValue); err != nil {
+					continue
+				}
+
+				var bubbleData struct {
+					Type       int    `json:"type"`
+					Text       string `json:"text"`
+					TokenCount struct {
+						InputTokens  int `json:"inputTokens"`
+						OutputTokens int `json:"outputTokens"`
+					} `json:"tokenCount"`
+				}
+
+				if err := json.Unmarshal(bubbleValue, &bubbleData); err != nil {
+					continue
+				}
+
+				if bubbleData.Text == "" {
+					continue
+				}
+
+				role := "user"
+				if bubbleData.Type == 2 {
+					role = "assistant"
+				}
+
+				if role == "user" && localFirstUserMsg == "" {
+					localFirstUserMsg = truncate(bubbleData.Text, 200)
+				}
+
+				inputTokens := bubbleData.TokenCount.InputTokens
+				outputTokens := bubbleData.TokenCount.OutputTokens
+				localInputTokens += inputTokens
+				localOutputTokens += outputTokens
+
+				timestamp := sessionStartTime
+				if timestamp.IsZero() {
+					timestamp = time.Now()
+				}
+
+				err := db.TxInsertMessage(tx, db.Message{
+					SessionID:    sessionID,
+					Project:      projectName,
+					Role:         role,
+					Content:      bubbleData.Text,
+					Timestamp:    timestamp,
+					Tool:         "cursor",
+					Provider:     "cursor",
+					InputTokens:  inputTokens,
+					OutputTokens: outputTokens,
+					Date:         timestamp.Format("2006-01-02"),
+				})
+				if err != nil {
+					indexErrors++
+					continue
+				}
+				localMsgCount++
+			}
+
+			if localMsgCount > 0 {
+				sessionDate := ""
+				if !sessionStartTime.IsZero() {
+					sessionDate = sessionStartTime.Format("2006-01-02")
+				}
+				if err := db.TxInsertSession(tx, db.Session{
+					ID:                sessionID,
+					Project:           projectName,
+					FirstQuery:        localFirstUserMsg,
+					MessageCount:      localMsgCount,
+					Tool:              "cursor",
+					FilePath:          dbPath,
+					Provider:          "cursor",
+					TotalInputTokens:  localInputTokens,
+					TotalOutputTokens: localOutputTokens,
+					StartTime:         sessionStartTime,
+					EndTime:           sessionEndTime,
+					Date:              sessionDate,
+				}); err != nil {
+					indexErrors++
+					return 0, localMsgCount
+				}
+				if err := tx.Commit(); err != nil {
+					indexErrors++
+					return 0, localMsgCount
+				}
+				return 1, localMsgCount
+			}
+			return 0, 0
+		}()
+		totalSessions += s
+		totalMessages += m
+	}
+	if err := rows.Err(); err != nil {
+		indexErrors++
 	}
 
 	return totalSessions, totalMessages

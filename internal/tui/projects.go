@@ -1,3 +1,5 @@
+// projects.go implements the interactive project selector TUI using Bubble Tea.
+// Users can toggle projects on/off for selective indexing during onboarding.
 package tui
 
 import (
@@ -9,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// ProjectItem represents a single project in the selector list.
 type ProjectItem struct {
 	Path         string
 	Name         string
@@ -17,6 +20,7 @@ type ProjectItem struct {
 	Selected     bool
 }
 
+// ProjectSelectorModel is the Bubble Tea model for the interactive project selector.
 type ProjectSelectorModel struct {
 	active      []ProjectItem
 	inactive    []ProjectItem
@@ -29,6 +33,7 @@ type ProjectSelectorModel struct {
 	OnComplete func(enabled []string, disabled []string)
 }
 
+// NewProjectSelectorModel creates a new project selector with active projects pre-selected.
 func NewProjectSelectorModel(active, inactive []ProjectItem) ProjectSelectorModel {
 	for i := range active {
 		active[i].Selected = true

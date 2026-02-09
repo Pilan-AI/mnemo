@@ -1,8 +1,10 @@
+// index_claude.go indexes Claude Code sessions stored as JSONL files.
+// Session data lives under ~/.claude/projects/<project-hash>/<session>.jsonl.
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,17 +13,18 @@ import (
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// indexClaudeCode walks the Claude Code projects directory and indexes each
+// JSONL session file. Returns total (sessions, messages) indexed.
 func indexClaudeCode(basePath string) (int, int) {
 	sessions := 0
 	messages := 0
 
-	// Recursively walk through all directories to find .jsonl files
-	_ = filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip errors, continue walking
+			indexErrors++
+			return nil
 		}
 
-		// Skip directories, only process .jsonl files
 		if info.IsDir() {
 			return nil
 		}
@@ -30,32 +33,41 @@ func indexClaudeCode(basePath string) (int, int) {
 			if skipOldFile(info) {
 				return nil
 			}
+			sessionID := strings.TrimSuffix(info.Name(), ".jsonl")
+			if isSessionUnchanged(sessionID, info.ModTime()) {
+				return nil
+			}
 			s, m := indexJSONLSession(path, "claude")
 			sessions += s
 			messages += m
 		}
 
 		return nil
-	})
+	}); err != nil {
+		indexErrors++
+	}
 
 	return sessions, messages
 }
 
+// indexJSONLSession parses a single JSONL session file (one JSON object per line)
+// and inserts all messages atomically within a transaction.
 func indexJSONLSession(path, tool string) (int, int) {
 	file, err := os.Open(path)
 	if err != nil {
+		indexErrors++
 		return 0, 0
 	}
 	defer func() { _ = file.Close() }()
 
-	info, _ := file.Stat()
+	info, err := file.Stat()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
 	if info.Size() == 0 {
 		return 0, 0
 	}
-
-	// Read file content
-	data, _ := io.ReadAll(file)
-	lines := strings.Split(string(data), "\n")
 
 	var firstUserMsg string
 	sessionID := filepath.Base(path)
@@ -68,7 +80,24 @@ func indexJSONLSession(path, tool string) (int, int) {
 	var sessionStartTime, sessionEndTime time.Time
 	var totalInputTokens, totalOutputTokens int
 
-	for _, line := range lines {
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+		indexErrors++
+		return 0, 0
+	}
+
+	// Stream JSONL line by line to avoid loading entire file into memory
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // Up to 10MB per line
+
+	for scanner.Scan() {
+		line := scanner.Text()
 		if line == "" {
 			continue
 		}
@@ -78,13 +107,11 @@ func indexJSONLSession(path, tool string) (int, int) {
 			continue
 		}
 
-		// Skip non-message entries
 		entryType, _ := entry["type"].(string)
 		if entryType != "user" && entryType != "assistant" {
 			continue
 		}
 
-		// Extract message content
 		var content string
 		var role string
 		var msgModel string
@@ -117,11 +144,9 @@ func indexJSONLSession(path, tool string) (int, int) {
 		}
 		sessionEndTime = timestamp
 
-		// Try new format first: {"type":"user","message":{"role":"user","content":"...","model":"...","usage":{...}}}
 		if msg, ok := entry["message"].(map[string]interface{}); ok {
 			role, _ = msg["role"].(string)
 
-			// Extract model
 			if m, ok := msg["model"].(string); ok && m != "" {
 				msgModel = m
 				if sessionModel == "" {
@@ -129,7 +154,6 @@ func indexJSONLSession(path, tool string) (int, int) {
 				}
 			}
 
-			// Extract token usage
 			if usage, ok := msg["usage"].(map[string]interface{}); ok {
 				if v, ok := usage["input_tokens"].(float64); ok {
 					msgInputTokens = int(v)
@@ -139,12 +163,10 @@ func indexJSONLSession(path, tool string) (int, int) {
 				}
 			}
 
-			// Handle different content formats
 			switch c := msg["content"].(type) {
 			case string:
 				content = c
 			case []interface{}:
-				// Claude's content array format
 				for _, item := range c {
 					if block, ok := item.(map[string]interface{}); ok {
 						if text, ok := block["text"].(string); ok {
@@ -154,8 +176,7 @@ func indexJSONLSession(path, tool string) (int, int) {
 				}
 			}
 		} else {
-			// Try old format: {"type":"user","content":"..."}
-			role = entryType // "user" or "assistant"
+			role = entryType
 			if c, ok := entry["content"].(string); ok {
 				content = c
 			}
@@ -168,27 +189,16 @@ func indexJSONLSession(path, tool string) (int, int) {
 		totalInputTokens += msgInputTokens
 		totalOutputTokens += msgOutputTokens
 
-		// Capture first user message
 		if role == "user" && firstUserMsg == "" {
 			firstUserMsg = truncate(content, 200)
 		}
 
-		// Determine provider from model name
-		msgProvider := ""
-		if msgModel != "" {
-			if strings.Contains(msgModel, "claude") {
-				msgProvider = "anthropic"
-			} else if strings.Contains(msgModel, "gpt") || strings.Contains(msgModel, "o1") || strings.Contains(msgModel, "o3") {
-				msgProvider = "openai"
-			} else if strings.Contains(msgModel, "gemini") || strings.Contains(msgModel, "gemma") {
-				msgProvider = "google"
-			}
-			if sessionProvider == "" && msgProvider != "" {
-				sessionProvider = msgProvider
-			}
+		msgProvider := inferProviderFromModel(msgModel)
+		if sessionProvider == "" && msgProvider != "" {
+			sessionProvider = msgProvider
 		}
 
-		err := db.InsertMessage(db.Message{
+		err := db.TxInsertMessage(tx, db.Message{
 			SessionID:        sessionID,
 			Project:          projectName,
 			Role:             role,
@@ -210,8 +220,12 @@ func indexJSONLSession(path, tool string) (int, int) {
 		msgCount++
 	}
 
+	if err := scanner.Err(); err != nil {
+		indexErrors++
+	}
+
 	if msgCount > 0 {
-		_ = db.InsertSession(db.Session{
+		if err := db.TxInsertSession(tx, db.Session{
 			ID:                sessionID,
 			Project:           projectName,
 			FirstQuery:        firstUserMsg,
@@ -227,7 +241,14 @@ func indexJSONLSession(path, tool string) (int, int) {
 			WorkingDirectory:  sessionCwd,
 			StartTime:         sessionStartTime,
 			EndTime:           sessionEndTime,
-		})
+		}); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
 		return 1, msgCount
 	}
 

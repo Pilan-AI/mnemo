@@ -1,14 +1,18 @@
+// search.go implements full-text search using SQLite FTS5 with BM25 ranking.
+// Provides both message-level search (Search) and session-grouped search
+// (SearchGrouped) with composite scoring: BM25 * temporal_decay * density_bonus.
 package db
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"time"
 )
 
 // SearchResult holds a single FTS5 search match with BM25 ranking.
-// Snippet contains the matched text with >>> and <<< delimiters for highlighting.
+// Snippet contains the matched text with \u27ea and \u27eb delimiters for highlighting.
 type SearchResult struct {
 	SessionID string
 	Project   string
@@ -38,9 +42,8 @@ type SessionMatch struct {
 }
 
 // sanitizeFTS5Query strips FTS5 special characters to prevent query syntax errors.
-// Without this, user queries containing ?, *, parentheses, etc. would cause
-// "fts5: syntax error" from SQLite.
-func sanitizeFTS5Query(query string) string {
+// Returns an error if the query is empty after sanitization.
+func sanitizeFTS5Query(query string) (string, error) {
 	specialChars := []string{"?", "*", "(", ")", "^", ":", "+", "-", "\"", "'"}
 
 	result := query
@@ -55,20 +58,23 @@ func sanitizeFTS5Query(query string) string {
 	result = strings.TrimSpace(result)
 
 	if result == "" {
-		return "error"
+		return "", fmt.Errorf("search query is empty after sanitization (original: %q)", query)
 	}
 
-	return result
+	return result, nil
 }
 
 // Search performs a full-text search using FTS5 with BM25 ranking.
-// Results include highlighted snippets with >>> <<< delimiters.
+// Results include highlighted snippets with \u27ea \u27eb delimiters.
 func Search(query string, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	safeQuery := sanitizeFTS5Query(query)
+	safeQuery, err := sanitizeFTS5Query(query)
+	if err != nil {
+		return nil, err
+	}
 
 	rows, err := db.Query(`
 		SELECT
@@ -76,7 +82,7 @@ func Search(query string, limit int) ([]SearchResult, error) {
 			m.project,
 			m.role,
 			m.content,
-			snippet(messages_fts, 0, '>>>', '<<<', '...', 256) as snippet,
+			snippet(messages_fts, 0, '⟪', '⟫', '...', 256) as snippet,
 			bm25(messages_fts) as rank,
 			m.tool,
 			m.model,
@@ -95,11 +101,14 @@ func Search(query string, limit int) ([]SearchResult, error) {
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		err := rows.Scan(&r.SessionID, &r.Project, &r.Role, &r.Content, &r.Snippet, &r.Rank, &r.Tool, &r.Model, &r.Provider)
-		if err != nil {
+		if err := rows.Scan(&r.SessionID, &r.Project, &r.Role, &r.Content, &r.Snippet, &r.Rank, &r.Tool, &r.Model, &r.Provider); err != nil {
+			log.Printf("Search: rows.Scan error: %v", err)
 			continue
 		}
 		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return results, fmt.Errorf("search iteration error: %w", err)
 	}
 
 	return results, nil
@@ -113,7 +122,10 @@ func SearchGrouped(query string, limit int) ([]SessionMatch, error) {
 		limit = 5
 	}
 
-	safeQuery := sanitizeFTS5Query(query)
+	safeQuery, err := sanitizeFTS5Query(query)
+	if err != nil {
+		return nil, err
+	}
 
 	// Fetch message-level results with higher limit for session grouping
 	fetchLimit := limit * 10
@@ -123,7 +135,7 @@ func SearchGrouped(query string, limit int) ([]SessionMatch, error) {
 
 	rows, err := db.Query(`
 		SELECT m.session_id, m.role,
-			   snippet(messages_fts, 0, '>>>', '<<<', '...', 64) as snippet,
+			   snippet(messages_fts, 0, '⟪', '⟫', '...', 64) as snippet,
 			   bm25(messages_fts) as rank
 		FROM messages_fts
 		JOIN messages m ON messages_fts.rowid = m.id
@@ -153,6 +165,7 @@ func SearchGrouped(query string, limit int) ([]SessionMatch, error) {
 		var sessionID, role, snippet string
 		var rank float64
 		if err := rows.Scan(&sessionID, &role, &snippet, &rank); err != nil {
+			log.Printf("SearchGrouped: rows.Scan error: %v", err)
 			continue
 		}
 
@@ -178,6 +191,9 @@ func SearchGrouped(query string, limit int) ([]SessionMatch, error) {
 			sd.bestSnippetRank = rank
 			sd.bestSnippetUser = isUser
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("grouped search iteration error: %w", err)
 	}
 
 	// Build SessionMatch results with session metadata
@@ -205,11 +221,21 @@ func SearchGrouped(query string, limit int) ([]SessionMatch, error) {
 		sm.StartTime = parseFlexibleTime(timeStr)
 
 		// Composite scoring: BM25 + density bonus + temporal decay + user-match bonus
-		daysOld := time.Since(sm.StartTime).Hours() / 24
-		temporalDecay := math.Exp(-0.03 * daysOld) // 1.0 for today, ~0.4 at 30 days
-		densityBonus := float64(sd.matchCount) * 0.05
-		userBonus := float64(sd.userHits) * 0.1
+		var temporalDecay float64
+		if sm.StartTime.IsZero() {
+			temporalDecay = 0.5 // Neutral fallback for sessions without timestamps
+		} else {
+			daysOld := time.Since(sm.StartTime).Hours() / 24
+			daysOld = math.Max(0, daysOld) // Clamp: future timestamps treated as "today"
+			temporalDecay = math.Exp(-0.03 * daysOld)
+		}
 
+		// Cap density bonus to prevent high-activity sessions from dominating
+		densityBonus := math.Min(float64(sd.matchCount)*0.05, 1.0)
+		userBonus := math.Min(float64(sd.userHits)*0.1, 1.0)
+
+		// BM25 returns negative scores (more negative = better match).
+		// Subtracting positive bonuses makes score more negative (= better rank).
 		sm.FinalScore = (sd.bestRank - densityBonus - userBonus) * temporalDecay
 
 		matches = append(matches, sm)
@@ -229,20 +255,27 @@ func SearchGrouped(query string, limit int) ([]SessionMatch, error) {
 	return matches, nil
 }
 
-// parseFlexibleTime handles both Go-formatted ("2026-02-07 01:01:01.381 +0000 UTC")
-// and SQLite datetime ("2026-02-07 17:56:52") timestamps from the database.
+// parseFlexibleTime handles multiple timestamp formats from the database.
+// All timestamps are normalized to UTC to prevent cross-timezone ranking errors.
 func parseFlexibleTime(s string) time.Time {
-	formats := []string{
+	if s == "" {
+		return time.Time{}
+	}
+	// Formats with explicit timezone info
+	tzFormats := []string{
 		"2006-01-02 15:04:05.999 -0700 MST",
 		"2006-01-02 15:04:05.999 +0000 UTC",
-		"2006-01-02 15:04:05",
-		"2006-01-02T15:04:05Z",
 		time.RFC3339,
+		"2006-01-02T15:04:05Z",
 	}
-	for _, f := range formats {
+	for _, f := range tzFormats {
 		if t, err := time.Parse(f, s); err == nil {
-			return t
+			return t.UTC()
 		}
+	}
+	// SQLite datetime format (no timezone) — treat as UTC
+	if t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.UTC); err == nil {
+		return t
 	}
 	return time.Time{}
 }

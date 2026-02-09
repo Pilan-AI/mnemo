@@ -41,3 +41,6 @@ assets/video/*.mkv
 # Local config
 .env
 .env.local
+
+# Local docs
+docs/audit

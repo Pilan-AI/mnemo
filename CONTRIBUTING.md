@@ -46,6 +46,7 @@ mnemo/
 │   ├── index_vscode.go        # VS Code AI chat adapter (SQLite)
 │   ├── search.go              # Full-text search command
 │   ├── serve.go               # MCP server for Claude Desktop/Code
+│   ├── status.go              # Database stats display
 │   ├── blocks.go              # 5-hour usage block display
 │   ├── projects.go            # Project management
 │   ├── tools.go               # Tool detection
@@ -53,17 +54,18 @@ mnemo/
 │   ├── install.go             # Plugin installer
 │   ├── context.go             # Context generation
 │   ├── recent.go              # Recent sessions display
+│   ├── version.go             # Build-time version info
 │   └── onboarding.go          # First-run experience
 ├── internal/
 │   ├── db/                    # SQLite database layer
-│   │   ├── sqlite.go          # Schema, migrations, init
-│   │   ├── messages.go        # Message CRUD
-│   │   ├── sessions.go        # Session CRUD
-│   │   ├── search.go          # FTS5 full-text search
-│   │   ├── projects.go        # Project management
-│   │   ├── token_usage.go     # Token/cost tracking
+│   │   ├── sqlite.go          # Schema, migrations, init, execer interface
+│   │   ├── messages.go        # Message CRUD (+ Tx variants)
+│   │   ├── sessions.go        # Session CRUD (+ Tx variants, typed returns)
+│   │   ├── search.go          # FTS5 full-text search + session grouping
+│   │   ├── projects.go        # Project management with transactions
+│   │   ├── token_usage.go     # Token/cost tracking (typed stats)
 │   │   └── blocks.go          # 5-hour session blocks
-│   └── tui/                   # Bubble Tea TUI components
+│   └── tui/                   # Interactive project selector
 └── proxy/                     # HTTP proxy for Claude API injection
 ```
 
@@ -86,12 +88,14 @@ mnemo/
 
 mnemo indexes AI coding sessions from 12+ tools. To add support for a new tool:
 
-1. Add a detection function in `cmd/tools.go` that locates session files
+1. Add a detection entry in `cmd/tools.go` `getSupportedTools()`
 2. Create a new `cmd/index_<tool>.go` file with the indexing function (see existing adapters for patterns)
 3. Wire it into the orchestrator in `cmd/index.go`
 4. Add the tool name to the `knownTools` list
 5. Add a test case in `cmd/index_adapters_test.go`
 6. Update `README.md` with the new tool
+
+**Transaction pattern**: All indexers must use transactions for atomicity. Call `db.TxInsertSession(tx, ...)` and `db.TxInsertMessage(tx, ...)` within a `tx, _ := db.BeginTx()` block. Always `defer tx.Rollback()` and explicitly `tx.Commit()` on success. See any existing adapter for the pattern.
 
 ## Running Tests
 

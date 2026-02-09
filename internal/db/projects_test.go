@@ -25,8 +25,57 @@ func setupTestDB(t *testing.T) func() {
 		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to open database: %v", openErr)
 	}
+	db.SetMaxOpenConns(1)
 
 	schema := `
+	CREATE TABLE IF NOT EXISTS messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id TEXT NOT NULL,
+		project TEXT NOT NULL,
+		role TEXT NOT NULL,
+		content TEXT NOT NULL,
+		timestamp DATETIME,
+		tool TEXT DEFAULT 'claude',
+		model TEXT DEFAULT '',
+		provider TEXT DEFAULT '',
+		input_tokens INTEGER DEFAULT 0,
+		output_tokens INTEGER DEFAULT 0,
+		cache_read_tokens INTEGER DEFAULT 0,
+		cache_write_tokens INTEGER DEFAULT 0,
+		cost_usd REAL DEFAULT 0.0,
+		message_uuid TEXT DEFAULT '',
+		parent_uuid TEXT DEFAULT '',
+		working_directory TEXT DEFAULT '',
+		reasoning_tokens INTEGER DEFAULT 0,
+		agent TEXT DEFAULT '',
+		date TEXT DEFAULT ''
+	);
+
+	CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+		content,
+		project,
+		session_id,
+		content='messages',
+		content_rowid='id'
+	);
+
+	CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+		INSERT INTO messages_fts(rowid, content, project, session_id)
+		VALUES (new.id, new.content, new.project, new.session_id);
+	END;
+
+	CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+		INSERT INTO messages_fts(messages_fts, rowid, content, project, session_id)
+		VALUES ('delete', old.id, old.content, old.project, old.session_id);
+	END;
+
+	CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+		INSERT INTO messages_fts(messages_fts, rowid, content, project, session_id)
+		VALUES ('delete', old.id, old.content, old.project, old.session_id);
+		INSERT INTO messages_fts(rowid, content, project, session_id)
+		VALUES (new.id, new.content, new.project, new.session_id);
+	END;
+
 	CREATE TABLE IF NOT EXISTS sessions (
 		id TEXT PRIMARY KEY,
 		project TEXT NOT NULL,
@@ -46,27 +95,33 @@ func setupTestDB(t *testing.T) func() {
 		git_branch TEXT DEFAULT '',
 		working_directory TEXT DEFAULT '',
 		start_time DATETIME,
-		end_time DATETIME
+		end_time DATETIME,
+		total_reasoning_tokens INTEGER DEFAULT 0,
+		agent TEXT DEFAULT '',
+		date TEXT DEFAULT ''
 	);
 
-	CREATE TABLE IF NOT EXISTS messages (
+	CREATE TABLE IF NOT EXISTS token_usage (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		session_id TEXT NOT NULL,
-		project TEXT NOT NULL,
-		role TEXT NOT NULL,
-		content TEXT NOT NULL,
-		timestamp DATETIME,
-		tool TEXT DEFAULT 'claude',
-		model TEXT DEFAULT '',
-		provider TEXT DEFAULT '',
+		timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+		model TEXT NOT NULL,
 		input_tokens INTEGER DEFAULT 0,
 		output_tokens INTEGER DEFAULT 0,
 		cache_read_tokens INTEGER DEFAULT 0,
 		cache_write_tokens INTEGER DEFAULT 0,
+		total_tokens INTEGER DEFAULT 0,
 		cost_usd REAL DEFAULT 0.0,
-		message_uuid TEXT DEFAULT '',
-		parent_uuid TEXT DEFAULT '',
-		working_directory TEXT DEFAULT ''
+		provider TEXT DEFAULT 'anthropic',
+		FOREIGN KEY (session_id) REFERENCES sessions(id)
+	);
+
+	CREATE TABLE IF NOT EXISTS api_credentials (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		provider TEXT NOT NULL UNIQUE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		last_used DATETIME,
+		is_valid INTEGER DEFAULT 1
 	);
 
 	CREATE TABLE IF NOT EXISTS projects (
@@ -79,6 +134,16 @@ func setupTestDB(t *testing.T) func() {
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+	CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project);
+	CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+	CREATE INDEX IF NOT EXISTS idx_sessions_tool ON sessions(tool);
+	CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time);
+	CREATE INDEX IF NOT EXISTS idx_sessions_indexed_at ON sessions(indexed_at);
+	CREATE INDEX IF NOT EXISTS idx_sessions_working_directory ON sessions(working_directory);
+	CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
+	CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_token_usage_provider ON token_usage(provider);
 	CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 	CREATE INDEX IF NOT EXISTS idx_projects_last_activity ON projects(last_activity);
 	`

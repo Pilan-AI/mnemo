@@ -38,12 +38,13 @@ import (
 )
 
 var (
-	indexAll    bool
-	indexTool   string
-	indexForce  bool
-	indexErrors int
-	indexPath   string
-	indexFormat string
+	indexAll         bool
+	indexTool        string
+	indexForce       bool
+	indexErrors      int
+	indexPath        string
+	indexFormat      string
+	indexIncremental bool
 )
 
 var indexCmd = &cobra.Command{
@@ -51,7 +52,11 @@ var indexCmd = &cobra.Command{
 	Short: "Index AI tool conversation history",
 	Long:  "Scan and index conversation history from all detected AI coding tools.",
 	Run: func(cmd *cobra.Command, args []string) {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error: cannot determine home directory: %v\n", err)
+			os.Exit(1)
+		}
 
 		// Normal index/re-index flow
 		fmt.Println("Indexing AI tool conversations...")
@@ -69,6 +74,16 @@ var indexCmd = &cobra.Command{
 			if err := db.ClearIndex(); err != nil {
 				fmt.Printf("Error clearing index: %v\n", err)
 				os.Exit(1)
+			}
+		}
+
+		// Load indexed sessions for incremental mode (default: on)
+		if indexIncremental && !indexForce {
+			if sessions, err := db.GetIndexedSessions(); err == nil {
+				indexedSessions = sessions
+			}
+			if toolTimes, err := db.GetMaxIndexedAtByTool(); err == nil {
+				lastSourceIndex = toolTimes
 			}
 		}
 
@@ -168,10 +183,14 @@ var indexCmd = &cobra.Command{
 		// Index Cursor (new globalStorage format)
 		cursorGlobalPath := filepath.Join(appSupportDir(home, "Cursor"), "User", "globalStorage", "state.vscdb")
 		if pathExists(cursorGlobalPath) && shouldIndex("cursor") {
-			sessions, messages := indexCursorGlobalStorage(cursorGlobalPath)
-			totalSessions += sessions
-			totalMessages += messages
-			fmt.Printf("  ✓ Cursor: %d sessions, %d messages\n", sessions, messages)
+			if isSourceDBUnchanged(cursorGlobalPath, "cursor") {
+				fmt.Printf("  ✓ Cursor: unchanged\n")
+			} else {
+				sessions, messages := indexCursorGlobalStorage(cursorGlobalPath)
+				totalSessions += sessions
+				totalMessages += messages
+				fmt.Printf("  ✓ Cursor: %d sessions, %d messages\n", sessions, messages)
+			}
 		}
 
 		// Index VS Code extensions (Kilo Code, Cline, Roo Code) across ALL IDEs
@@ -209,19 +228,23 @@ var indexCmd = &cobra.Command{
 		// Index Crush CLI - main directory
 		if shouldIndex("crush") {
 			crushPath := filepath.Join(home, ".crush", "crush.db")
-			crushSessions := 0
-			crushMessages := 0
-			if pathExists(crushPath) {
-				s, m := indexCrush(crushPath)
-				crushSessions += s
-				crushMessages += m
-			}
+			if pathExists(crushPath) && isSourceDBUnchanged(crushPath, "crush") {
+				fmt.Printf("  ✓ Crush: unchanged\n")
+			} else {
+				crushSessions := 0
+				crushMessages := 0
+				if pathExists(crushPath) {
+					s, m := indexCrush(crushPath)
+					crushSessions += s
+					crushMessages += m
+				}
 
-			crushSessions, crushMessages = scanCrushPerProject(home, crushSessions, crushMessages)
-			if crushSessions > 0 {
-				totalSessions += crushSessions
-				totalMessages += crushMessages
-				fmt.Printf("  ✓ Crush: %d sessions, %d messages\n", crushSessions, crushMessages)
+				crushSessions, crushMessages = scanCrushPerProject(home, crushSessions, crushMessages)
+				if crushSessions > 0 {
+					totalSessions += crushSessions
+					totalMessages += crushMessages
+					fmt.Printf("  ✓ Crush: %d sessions, %d messages\n", crushSessions, crushMessages)
+				}
 			}
 		}
 
@@ -310,7 +333,11 @@ func runOnboarding() {
 	}
 	defer db.CloseDB()
 
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Printf("Error: cannot determine home directory: %v\n", err)
+		os.Exit(1)
+	}
 	start := time.Now()
 
 	// Inline styles
@@ -468,6 +495,11 @@ func runOnboarding() {
 		ch := make(chan scanResult, 1)
 		scanFn := tool.scan
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					ch <- scanResult{0, 0}
+				}
+			}()
 			s, m := scanFn()
 			ch <- scanResult{s, m}
 		}()
@@ -520,8 +552,12 @@ func runOnboarding() {
 		toolCount,
 		dim.Render(fmt.Sprintf("%.1fs", elapsed.Seconds())))
 
-	_ = populateProjectsFromSessions()
-	_ = db.ClassifyProjects()
+	if err := populateProjectsFromSessions(); err != nil {
+		fmt.Printf("  (Warning: could not populate projects: %v)\n", err)
+	}
+	if err := db.ClassifyProjects(); err != nil {
+		fmt.Printf("  (Warning: could not classify projects: %v)\n", err)
+	}
 
 	// Surface discoveries from indexed data
 	gold := lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b"))
@@ -611,7 +647,10 @@ func runOnboarding() {
 					toolDist = append(toolDist, fmt.Sprintf("%s (%d)", t, s))
 				}
 			}
-			_ = rows.Close()
+			if err := rows.Err(); err != nil {
+				indexErrors++
+			}
+			rows.Close()
 			if len(toolDist) >= 2 {
 				discoveries = append(discoveries, discovery{
 					label:  "Tool mix",
@@ -716,7 +755,10 @@ func indexCustomPath(customPath, format string) (int, int) {
 }
 
 func populateProjectsFromSessions() error {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot determine home directory: %w", err)
+	}
 
 	rows, err := db.GetDB().Query(`
 		SELECT DISTINCT working_directory, MAX(COALESCE(start_time, indexed_at)) as last_activity
@@ -755,6 +797,9 @@ func populateProjectsFromSessions() error {
 
 		_ = db.UpsertProject(workDir, lastActivity)
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating session rows: %w", err)
+	}
 
 	return nil
 }
@@ -765,5 +810,6 @@ func init() {
 	indexCmd.Flags().BoolVarP(&indexForce, "force", "f", false, "Force re-index (clear existing)")
 	indexCmd.Flags().StringVarP(&indexPath, "path", "p", "", "Custom path to index (requires --format)")
 	indexCmd.Flags().StringVar(&indexFormat, "format", "", "Format for custom path: claude, opencode, codex, amp, gemini, cline, kiro, antigravity")
+	indexCmd.Flags().BoolVar(&indexIncremental, "incremental", true, "Skip unchanged sessions (compare file mtime vs indexed_at)")
 	rootCmd.AddCommand(indexCmd)
 }

@@ -32,6 +32,7 @@ type Server struct {
 	sessionID string
 }
 
+// ClaudeRequest represents an outgoing Claude API request body.
 type ClaudeRequest struct {
 	Model       string          `json:"model"`
 	Messages    []ClaudeMessage `json:"messages"`
@@ -41,11 +42,13 @@ type ClaudeRequest struct {
 	Stream      bool            `json:"stream,omitempty"`
 }
 
+// ClaudeMessage represents a single message in a Claude API conversation.
 type ClaudeMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
+// ClaudeResponse represents the Claude API response body with usage metadata.
 type ClaudeResponse struct {
 	ID      string         `json:"id"`
 	Type    string         `json:"type"`
@@ -55,11 +58,13 @@ type ClaudeResponse struct {
 	Usage   UsageInfo      `json:"usage"`
 }
 
+// ContentBlock represents a single content block in a Claude response (text, image, etc.).
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
 
+// UsageInfo holds token consumption counts from a Claude API response.
 type UsageInfo struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
@@ -76,6 +81,7 @@ func NewServer(port, upstream string) *Server {
 	}
 }
 
+// Start begins listening for HTTP requests and proxying them to the Claude API.
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", s.handleMessages)
@@ -100,12 +106,14 @@ func (s *Server) Shutdown() error {
 }
 
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
+	defer func() { _ = r.Body.Close() }()
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		log.Printf("Failed to read request body: %v\n", err)
 		http.Error(w, "Failed to read request", http.StatusBadRequest)
 		return
 	}
-	defer func() { _ = r.Body.Close() }()
 
 	var req ClaudeRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -121,17 +129,20 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		req.System = strings.TrimSpace(req.System) + "\n\n---\n## Project Memory (mnemo)\n" + mnemoContext + "\n---"
 	}
 
-	upstreamResp, rawBody, err := s.forwardToUpstream(&req)
+	upstreamResp, rawBody, statusCode, err := s.forwardToUpstream(&req)
 	if err != nil {
 		log.Printf("Failed to forward to upstream: %v\n", err)
 		http.Error(w, "Upstream error", http.StatusBadGateway)
 		return
 	}
 
-	s.trackTokenUsage(upstreamResp, req.Model)
+	if statusCode == 200 {
+		s.trackTokenUsage(upstreamResp, req.Model)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Mnemo-Tracked", "true")
+	w.WriteHeader(statusCode)
 	_, _ = w.Write(rawBody)
 }
 
@@ -142,7 +153,10 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	byProvider, _ := db.GetTokenStatsByProvider(30)
+	byProvider, err := db.GetTokenStatsByProvider(30)
+	if err != nil {
+		log.Printf("Failed to get stats by provider: %v\n", err)
+	}
 
 	response := map[string]interface{}{
 		"total":       stats,
@@ -288,15 +302,15 @@ func (s *Server) getMnemoContext(project, query string) string {
 	return ctx.String()
 }
 
-func (s *Server) forwardToUpstream(req *ClaudeRequest) (*ClaudeResponse, []byte, error) {
+func (s *Server) forwardToUpstream(req *ClaudeRequest) (*ClaudeResponse, []byte, int, error) {
 	reqBody, err := json.Marshal(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	upstreamReq, err := http.NewRequest("POST", s.upstream+"/v1/messages", strings.NewReader(string(reqBody)))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 
 	upstreamReq.Header.Set("Content-Type", "application/json")
@@ -306,19 +320,19 @@ func (s *Server) forwardToUpstream(req *ClaudeRequest) (*ClaudeResponse, []byte,
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, resp.StatusCode, err
 	}
 
 	var claudeResp ClaudeResponse
 	if err := json.Unmarshal(body, &claudeResp); err != nil {
-		return nil, body, nil
+		return nil, body, resp.StatusCode, nil
 	}
 
-	return &claudeResp, body, nil
+	return &claudeResp, body, resp.StatusCode, nil
 }

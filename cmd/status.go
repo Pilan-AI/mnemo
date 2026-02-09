@@ -1,3 +1,5 @@
+// status.go displays system status including database stats, tool detection,
+// and token usage summaries.
 package cmd
 
 import (
@@ -16,7 +18,11 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show mnemo database stats and background index status",
 	Run: func(cmd *cobra.Command, args []string) {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error: cannot determine home directory: %v\n", err)
+			return
+		}
 		mnemoDir := filepath.Join(home, ".mnemo")
 		dbPath := filepath.Join(mnemoDir, "mnemo.db")
 
@@ -33,14 +39,14 @@ var statusCmd = &cobra.Command{
 
 		// DB stats
 		var sessions, messages, tools int
-		if row := db.GetDB().QueryRow("SELECT COUNT(*) FROM sessions"); row != nil {
-			_ = row.Scan(&sessions)
+		if err := db.GetDB().QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions); err != nil {
+			fmt.Printf("  Warning: could not count sessions: %v\n", err)
 		}
-		if row := db.GetDB().QueryRow("SELECT COUNT(*) FROM messages"); row != nil {
-			_ = row.Scan(&messages)
+		if err := db.GetDB().QueryRow("SELECT COUNT(*) FROM messages").Scan(&messages); err != nil {
+			fmt.Printf("  Warning: could not count messages: %v\n", err)
 		}
-		if row := db.GetDB().QueryRow("SELECT COUNT(DISTINCT tool) FROM sessions"); row != nil {
-			_ = row.Scan(&tools)
+		if err := db.GetDB().QueryRow("SELECT COUNT(DISTINCT tool) FROM sessions").Scan(&tools); err != nil {
+			fmt.Printf("  Warning: could not count tools: %v\n", err)
 		}
 
 		fmt.Println()

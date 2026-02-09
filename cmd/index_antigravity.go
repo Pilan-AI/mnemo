@@ -1,3 +1,5 @@
+// index_antigravity.go indexes Antigravity IDE sessions stored as JSONL files.
+// Sessions live under ~/.gemini/antigravity/code_tracker/<project>/*.jsonl.
 package cmd
 
 import (
@@ -11,6 +13,8 @@ import (
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// indexAntigravityCodeTracker walks the Antigravity code_tracker directory
+// and indexes each JSONL session file. Returns total (sessions, messages) indexed.
 func indexAntigravityCodeTracker(codeTrackerPath string) (int, int) {
 	jsonlFiles, err := filepath.Glob(filepath.Join(codeTrackerPath, "*", "*.jsonl"))
 	if err != nil {
@@ -24,6 +28,10 @@ func indexAntigravityCodeTracker(codeTrackerPath string) (int, int) {
 		if info, err := os.Stat(jsonlPath); err == nil && skipOldFile(info) {
 			continue
 		}
+		fileSessionID := strings.TrimSuffix(filepath.Base(jsonlPath), ".jsonl")
+		if info, err := os.Stat(jsonlPath); err == nil && isSessionUnchanged(fileSessionID, info.ModTime()) {
+			continue
+		}
 		s, m := indexAntigravitySession(jsonlPath)
 		totalSessions += s
 		totalMessages += m
@@ -32,6 +40,8 @@ func indexAntigravityCodeTracker(codeTrackerPath string) (int, int) {
 	return totalSessions, totalMessages
 }
 
+// indexAntigravitySession parses a single Antigravity JSONL file and
+// inserts all messages atomically within a transaction.
 func indexAntigravitySession(jsonlPath string) (int, int) {
 	file, err := os.Open(jsonlPath)
 	if err != nil {
@@ -46,6 +56,18 @@ func indexAntigravitySession(jsonlPath string) (int, int) {
 	projectName := filepath.Base(parentDir)
 	if projectName == "no_repo" {
 		projectName = "antigravity"
+	}
+
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+		indexErrors++
+		return 0, 0
 	}
 
 	scanner := bufio.NewScanner(file)
@@ -103,7 +125,7 @@ func indexAntigravitySession(jsonlPath string) (int, int) {
 			}
 		}
 
-		err := db.InsertMessage(db.Message{
+		err := db.TxInsertMessage(tx, db.Message{
 			SessionID: sessionID,
 			Role:      role,
 			Content:   event.Content,
@@ -111,13 +133,26 @@ func indexAntigravitySession(jsonlPath string) (int, int) {
 			Tool:      "antigravity",
 			Timestamp: timestamp,
 		})
-		if err == nil {
-			messagesIndexed++
+		if err != nil {
+			indexErrors++
+			continue
 		}
+		messagesIndexed++
+	}
+
+	if err := scanner.Err(); err != nil {
+		indexErrors++
 	}
 
 	if messagesIndexed > 0 {
-		_ = db.InsertSessionSimple(sessionID, projectName, firstQuery, jsonlPath, "antigravity", messagesIndexed)
+		if err := db.TxInsertSessionSimple(tx, sessionID, projectName, firstQuery, jsonlPath, "antigravity", messagesIndexed); err != nil {
+			indexErrors++
+			return 0, messagesIndexed
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, messagesIndexed
+		}
 		return 1, messagesIndexed
 	}
 

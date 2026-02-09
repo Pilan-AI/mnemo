@@ -1,3 +1,6 @@
+// index_crush.go indexes Crush CLI sessions from its SQLite database.
+// Crush stores conversations in ~/.crush/crush.db with proper sessions/messages
+// tables. Also scans per-project crush.db files in enabled project directories.
 package cmd
 
 import (
@@ -20,6 +23,7 @@ func indexCrush(dbPath string) (int, int) {
 	}
 	defer func() { _ = crushDB.Close() }()
 
+	// Phase 1: Read all messages from Crush's SQLite into memory
 	rows, err := crushDB.Query(`
 		SELECT s.id, s.title, m.role, m.parts, m.created_at, m.model, m.provider
 		FROM sessions s
@@ -31,11 +35,19 @@ func indexCrush(dbPath string) (int, int) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	sessionMsgCounts := make(map[string]int)
+	type crushMsg struct {
+		role      string
+		content   string
+		timestamp time.Time
+		model     string
+		provider  string
+	}
+
+	sessionMsgs := make(map[string][]crushMsg)
+	sessionTitles := make(map[string]string)
 	sessionFirstMsg := make(map[string]string)
 	sessionModels := make(map[string]string)
 	sessionProviders := make(map[string]string)
-	totalMessages := 0
 
 	for rows.Next() {
 		var sessionID, title, role, partsJSON string
@@ -67,9 +79,8 @@ func indexCrush(dbPath string) (int, int) {
 			continue
 		}
 
-		projectName := title
-		if projectName == "" {
-			projectName = "crush"
+		if sessionTitles[sessionID] == "" {
+			sessionTitles[sessionID] = title
 		}
 
 		modelStr := ""
@@ -88,28 +99,20 @@ func indexCrush(dbPath string) (int, int) {
 			sessionProviders[sessionID] = providerStr
 		}
 
-		timestamp := time.UnixMilli(createdAt)
-
-		err := db.InsertMessage(db.Message{
-			SessionID: sessionID,
-			Project:   projectName,
-			Role:      role,
-			Content:   content,
-			Timestamp: timestamp,
-			Tool:      "crush",
-			Model:     modelStr,
-			Provider:  providerStr,
+		sessionMsgs[sessionID] = append(sessionMsgs[sessionID], crushMsg{
+			role:      role,
+			content:   content,
+			timestamp: time.UnixMilli(createdAt),
+			model:     modelStr,
+			provider:  providerStr,
 		})
-		if err != nil {
-			indexErrors++
-			continue
-		}
 
-		sessionMsgCounts[sessionID]++
 		if role == "user" && sessionFirstMsg[sessionID] == "" {
 			sessionFirstMsg[sessionID] = truncate(content, 200)
 		}
-		totalMessages++
+	}
+	if err := rows.Err(); err != nil {
+		indexErrors++
 	}
 
 	// Fetch session-level token/cost data from Crush's sessions table
@@ -132,32 +135,87 @@ func indexCrush(dbPath string) (int, int) {
 		}
 	}
 
-	for sessionID, msgCount := range sessionMsgCounts {
-		stats := sessionStats[sessionID]
-		_ = db.InsertSession(db.Session{
-			ID:                sessionID,
-			Project:           "crush",
-			FirstQuery:        sessionFirstMsg[sessionID],
-			MessageCount:      msgCount,
-			Tool:              "crush",
-			FilePath:          dbPath,
-			Model:             sessionModels[sessionID],
-			Provider:          sessionProviders[sessionID],
-			TotalInputTokens:  stats.promptTokens,
-			TotalOutputTokens: stats.completionTokens,
-			TotalCostUSD:      stats.cost,
-		})
+	// Phase 2: Write each session atomically
+	sessionCount := 0
+	totalMessages := 0
+
+	for sessionID, msgs := range sessionMsgs {
+		tx, err := db.BeginTx()
+		if err != nil {
+			indexErrors++
+			continue
+		}
+
+		if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+			_ = tx.Rollback()
+			indexErrors++
+			continue
+		}
+
+		projectName := sessionTitles[sessionID]
+		if projectName == "" {
+			projectName = "crush"
+		}
+
+		msgCount := 0
+		for _, msg := range msgs {
+			if err := db.TxInsertMessage(tx, db.Message{
+				SessionID: sessionID,
+				Project:   projectName,
+				Role:      msg.role,
+				Content:   msg.content,
+				Timestamp: msg.timestamp,
+				Tool:      "crush",
+				Model:     msg.model,
+				Provider:  msg.provider,
+			}); err != nil {
+				indexErrors++
+				continue
+			}
+			msgCount++
+		}
+
+		if msgCount > 0 {
+			stats := sessionStats[sessionID]
+			if err := db.TxInsertSession(tx, db.Session{
+				ID:                sessionID,
+				Project:           "crush",
+				FirstQuery:        sessionFirstMsg[sessionID],
+				MessageCount:      msgCount,
+				Tool:              "crush",
+				FilePath:          dbPath,
+				Model:             sessionModels[sessionID],
+				Provider:          sessionProviders[sessionID],
+				TotalInputTokens:  stats.promptTokens,
+				TotalOutputTokens: stats.completionTokens,
+				TotalCostUSD:      stats.cost,
+			}); err != nil {
+				_ = tx.Rollback()
+				indexErrors++
+				continue
+			}
+			if err := tx.Commit(); err != nil {
+				indexErrors++
+				continue
+			}
+			sessionCount++
+			totalMessages += msgCount
+		} else {
+			_ = tx.Rollback()
+		}
 	}
 
-	return len(sessionMsgCounts), totalMessages
+	return sessionCount, totalMessages
 }
 
+// scanCrushPerProject scans for per-project crush.db files in enabled project
+// directories and indexes any that exist.
 func scanCrushPerProject(home string, sessions, messages int) (int, int) {
 	enabledProjects, err := db.GetEnabledProjects()
 	if err != nil || len(enabledProjects) == 0 {
 		projectsPath := filepath.Join(home, "Projects")
 		if pathExists(projectsPath) {
-			_ = filepath.Walk(projectsPath, func(path string, info os.FileInfo, err error) error {
+			if err := filepath.Walk(projectsPath, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return nil
 				}
@@ -167,7 +225,9 @@ func scanCrushPerProject(home string, sessions, messages int) (int, int) {
 					messages += m
 				}
 				return nil
-			})
+			}); err != nil {
+				indexErrors++
+			}
 		}
 		return sessions, messages
 	}

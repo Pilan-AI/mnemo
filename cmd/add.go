@@ -36,7 +36,11 @@ Examples:
 
 		// Expand ~ to home directory
 		if strings.HasPrefix(sourcePath, "~") {
-			home, _ := os.UserHomeDir()
+			home, err := os.UserHomeDir()
+			if err != nil {
+				fmt.Printf("Error: cannot determine home directory: %v\n", err)
+				return
+			}
 			sourcePath = filepath.Join(home, sourcePath[1:])
 		}
 

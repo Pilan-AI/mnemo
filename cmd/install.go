@@ -31,7 +31,11 @@ This command will:
 The MCP server provides tools like mnemo_search, mnemo_context, and mnemo_recent
 directly in Claude Desktop.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error: cannot determine home directory: %v\n", err)
+			return
+		}
 
 		fmt.Println("Installing mnemo plugins and MCP server...")
 		fmt.Println()

@@ -1,7 +1,11 @@
+// blocks.go implements 5-hour usage block analysis for rate limit tracking.
+// Groups token usage entries into time-bounded blocks matching Claude's rate
+// limit reset window, with per-block statistics and projections.
 package db
 
 import (
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -142,9 +146,13 @@ func GetUsageEntries(days int) ([]UsageEntry, error) {
 			&e.CostUSD,
 		)
 		if err != nil {
+			log.Printf("getUsageEntries: rows.Scan error: %v", err)
 			continue
 		}
 		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("GetUsageEntries iteration error: %w", err)
 	}
 
 	if len(entries) == 0 {
@@ -193,12 +201,20 @@ func getUsageEntriesFromSessions(days int) ([]UsageEntry, error) {
 			&e.CostUSD,
 		)
 		if err != nil {
+			log.Printf("getUsageEntriesFromSessions: rows.Scan error: %v", err)
 			continue
 		}
 		if ts, parseErr := time.Parse("2006-01-02 15:04:05", tsStr); parseErr == nil {
 			e.Timestamp = ts
+		} else if ts, parseErr := time.Parse(time.RFC3339, tsStr); parseErr == nil {
+			e.Timestamp = ts
+		} else {
+			continue // Skip entries with unparseable timestamps
 		}
 		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("getUsageEntriesFromSessions iteration error: %w", err)
 	}
 
 	return entries, nil
@@ -399,10 +415,14 @@ func GetUsageByToolInWindow(provider string, windowStart, windowEnd time.Time) (
 			&s.SessionCount,
 		)
 		if err != nil {
+			log.Printf("GetUsageByToolAndProvider: rows.Scan error: %v", err)
 			continue
 		}
 		s.TotalTokens = s.InputTokens + s.OutputTokens + s.CacheRead + s.CacheWrite
 		results = append(results, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("GetUsageByToolInWindow iteration error: %w", err)
 	}
 
 	return results, nil

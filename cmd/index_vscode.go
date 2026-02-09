@@ -1,3 +1,6 @@
+// index_vscode.go indexes VS Code AI chat sessions from state.vscdb databases.
+// Scans workspaceStorage directories across multiple IDEs (Code, Cursor,
+// Windsurf, VSCodium, Antigravity, Kiro, Trae) for AI extension conversations.
 package cmd
 
 import (
@@ -77,6 +80,9 @@ func indexVSCodeAIChat(workspaceStoragePath, toolName string) (int, int) {
 		if info, err := os.Stat(dbPath); err == nil && skipOldFile(info) {
 			continue
 		}
+		if info, err := os.Stat(dbPath); err == nil && isSessionUnchanged(wsDir.Name(), info.ModTime()) {
+			continue
+		}
 
 		s, m := indexVSCodeWorkspace(dbPath, wsDir.Name(), toolName)
 		totalSessions += s
@@ -86,6 +92,8 @@ func indexVSCodeAIChat(workspaceStoragePath, toolName string) (int, int) {
 	return totalSessions, totalMessages
 }
 
+// indexVSCodeWorkspace opens a single workspace's state.vscdb and indexes
+// AI chat tabs, inserting each tab atomically using a closure pattern.
 func indexVSCodeWorkspace(dbPath, workspaceID, toolName string) (int, int) {
 	sqliteDB, err := db.OpenReadOnlySQLite(dbPath)
 	if err != nil {
@@ -140,54 +148,77 @@ func indexVSCodeWorkspace(dbPath, workspaceID, toolName string) (int, int) {
 			projectName = toolName
 		}
 
-		var firstUserMsg string
-		msgCount := 0
-
-		for _, bubble := range tab.Bubbles {
-			var role, content string
-
-			switch bubble.Type {
-			case "user":
-				role = "user"
-				content = extractVSCodeUserContent(bubble.InitText, bubble.RichText, bubble.RawText)
-			case "ai":
-				role = "assistant"
-				content = bubble.Text
-				if content == "" {
-					content = bubble.RawText
-				}
-			default:
-				continue
-			}
-
-			if content == "" {
-				continue
-			}
-
-			if role == "user" && firstUserMsg == "" {
-				firstUserMsg = truncate(content, 200)
-			}
-
-			err := db.InsertMessage(db.Message{
-				SessionID: sessionID,
-				Project:   projectName,
-				Role:      role,
-				Content:   content,
-				Timestamp: time.Now(),
-				Tool:      toolName,
-			})
-			if err != nil {
+		s, m := func() (int, int) {
+			tx, txErr := db.BeginTx()
+			if txErr != nil {
 				indexErrors++
-				continue
+				return 0, 0
 			}
-			msgCount++
-		}
+			defer func() { _ = tx.Rollback() }()
 
-		if msgCount > 0 {
-			_ = db.InsertSessionSimple(sessionID, projectName, firstUserMsg, dbPath, toolName, msgCount)
-			totalSessions++
-			totalMessages += msgCount
-		}
+			if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+				indexErrors++
+				return 0, 0
+			}
+
+			var firstUserMsg string
+			msgCount := 0
+
+			for _, bubble := range tab.Bubbles {
+				var role, content string
+
+				switch bubble.Type {
+				case "user":
+					role = "user"
+					content = extractVSCodeUserContent(bubble.InitText, bubble.RichText, bubble.RawText)
+				case "ai":
+					role = "assistant"
+					content = bubble.Text
+					if content == "" {
+						content = bubble.RawText
+					}
+				default:
+					continue
+				}
+
+				if content == "" {
+					continue
+				}
+
+				if role == "user" && firstUserMsg == "" {
+					firstUserMsg = truncate(content, 200)
+				}
+
+				err := db.TxInsertMessage(tx, db.Message{
+					SessionID: sessionID,
+					Project:   projectName,
+					Role:      role,
+					Content:   content,
+					Timestamp: time.Now(),
+					Tool:      toolName,
+				})
+				if err != nil {
+					indexErrors++
+					continue
+				}
+				msgCount++
+			}
+
+			if msgCount > 0 {
+				if err := db.TxInsertSessionSimple(tx, sessionID, projectName, firstUserMsg, dbPath, toolName, msgCount); err != nil {
+					indexErrors++
+					return 0, msgCount
+				}
+				if err := tx.Commit(); err != nil {
+					indexErrors++
+					return 0, msgCount
+				}
+				return 1, msgCount
+			}
+			return 0, 0
+		}()
+		totalSessions += s
+		totalMessages += m
 	}
 
 	return totalSessions, totalMessages

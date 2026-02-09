@@ -1,3 +1,5 @@
+// recent.go displays the most recent AI coding sessions with optional
+// day-range filtering.
 package cmd
 
 import (
@@ -39,26 +41,13 @@ var recentCmd = &cobra.Command{
 
 		count := 0
 		for _, session := range sessions {
-			indexedAt, ok := session["indexedAt"].(time.Time)
-			if !ok {
+			if recentDays > 0 && session.IndexedAt.Before(cutoff) {
 				continue
 			}
 
-			if recentDays > 0 && indexedAt.Before(cutoff) {
-				continue
-			}
-
-			project := session["project"].(string)
-			messages := session["messages"].(int)
-			tool := session["tool"].(string)
-			firstQuery := ""
-			if fq, ok := session["firstQuery"].(string); ok {
-				firstQuery = fq
-			}
-
-			fmt.Printf("[%s] %s (%d messages)\n", tool, project, messages)
-			if firstQuery != "" {
-				fmt.Printf("       %s\n", truncate(firstQuery, 70))
+			fmt.Printf("[%s] %s (%d messages)\n", session.Tool, session.Project, session.MessageCount)
+			if session.FirstQuery != "" {
+				fmt.Printf("       %s\n", truncate(session.FirstQuery, 70))
 			}
 
 			count++

@@ -1,3 +1,6 @@
+// index_gemini.go indexes Gemini CLI sessions stored as JSON files.
+// Supports both old format (flat message arrays) and new format (structured
+// with metadata, exchanges, and token usage). Sessions live under ~/.gemini/sessions/.
 package cmd
 
 import (
@@ -10,8 +13,13 @@ import (
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// indexGeminiCLI walks the Gemini sessions directory and indexes each JSON file,
+// auto-detecting old vs new format. Returns total (sessions, messages) indexed.
 func indexGeminiCLI(sessionsPath string) (int, int) {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return 0, 0
+	}
 	totalSessions := 0
 	totalMessages := 0
 
@@ -67,6 +75,7 @@ func indexGeminiCLI(sessionsPath string) (int, int) {
 	return totalSessions, totalMessages
 }
 
+// indexGeminiSessionOld parses the legacy Gemini JSON format (flat message arrays).
 func indexGeminiSessionOld(sessionPath string) (int, int) {
 	data, err := os.ReadFile(sessionPath)
 	if err != nil {
@@ -93,6 +102,11 @@ func indexGeminiSessionOld(sessionPath string) (int, int) {
 		return 0, 0
 	}
 
+	// Incremental check using the actual session ID from JSON
+	if info, err := os.Stat(sessionPath); err == nil && isSessionUnchanged(session.ID, info.ModTime()) {
+		return 0, 0
+	}
+
 	projectName := filepath.Base(session.ProjectPath)
 	if projectName == "" || projectName == "." {
 		projectName = "gemini"
@@ -100,6 +114,22 @@ func indexGeminiSessionOld(sessionPath string) (int, int) {
 
 	var firstUserMsg string
 	msgCount := 0
+
+	if session.ID == "" {
+		return 0, 0
+	}
+
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, session.ID); err != nil {
+		indexErrors++
+		return 0, 0
+	}
 
 	for _, msg := range session.Messages {
 		if msg.Content == "" {
@@ -117,7 +147,7 @@ func indexGeminiSessionOld(sessionPath string) (int, int) {
 			}
 		}
 
-		err := db.InsertMessage(db.Message{
+		err := db.TxInsertMessage(tx, db.Message{
 			SessionID: session.ID,
 			Project:   projectName,
 			Role:      msg.Role,
@@ -133,13 +163,22 @@ func indexGeminiSessionOld(sessionPath string) (int, int) {
 	}
 
 	if msgCount > 0 {
-		_ = db.InsertSessionSimple(session.ID, projectName, firstUserMsg, sessionPath, "gemini", msgCount)
+		if err := db.TxInsertSessionSimple(tx, session.ID, projectName, firstUserMsg, sessionPath, "gemini", msgCount); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
 		return 1, msgCount
 	}
 
 	return 0, 0
 }
 
+// indexGeminiSessionNew parses the structured Gemini JSON format with metadata,
+// exchanges, and token usage fields.
 func indexGeminiSessionNew(sessionPath string) (int, int) {
 	data, err := os.ReadFile(sessionPath)
 	if err != nil {
@@ -175,12 +214,37 @@ func indexGeminiSessionNew(sessionPath string) (int, int) {
 		return 0, 0
 	}
 
-	projectName := "gemini-" + session.ProjectHash[:8]
+	// Incremental check using the actual session ID from JSON
+	if info, err := os.Stat(sessionPath); err == nil && isSessionUnchanged(session.SessionID, info.ModTime()) {
+		return 0, 0
+	}
+
+	hashSuffix := session.ProjectHash
+	if len(hashSuffix) > 8 {
+		hashSuffix = hashSuffix[:8]
+	}
+	projectName := "gemini-" + hashSuffix
 	var firstUserMsg string
 	var sessionModel string
 	var totalInputTokens, totalOutputTokens int
 	var sessionStartTime, sessionEndTime time.Time
 	msgCount := 0
+
+	if session.SessionID == "" {
+		return 0, 0
+	}
+
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, session.SessionID); err != nil {
+		indexErrors++
+		return 0, 0
+	}
 
 	for _, msg := range session.Messages {
 		if msg.Content == "" {
@@ -218,7 +282,7 @@ func indexGeminiSessionNew(sessionPath string) (int, int) {
 		totalInputTokens += inputTokens
 		totalOutputTokens += outputTokens
 
-		err := db.InsertMessage(db.Message{
+		err := db.TxInsertMessage(tx, db.Message{
 			SessionID:       session.SessionID,
 			Project:         projectName,
 			Role:            role,
@@ -245,7 +309,7 @@ func indexGeminiSessionNew(sessionPath string) (int, int) {
 		if !sessionStartTime.IsZero() {
 			sessionDate = sessionStartTime.Format("2006-01-02")
 		}
-		_ = db.InsertSession(db.Session{
+		if err := db.TxInsertSession(tx, db.Session{
 			ID:                session.SessionID,
 			Project:           projectName,
 			FirstQuery:        firstUserMsg,
@@ -259,7 +323,14 @@ func indexGeminiSessionNew(sessionPath string) (int, int) {
 			StartTime:         sessionStartTime,
 			EndTime:           sessionEndTime,
 			Date:              sessionDate,
-		})
+		}); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
 		return 1, msgCount
 	}
 

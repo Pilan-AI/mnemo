@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-01-30 | Updated: 2026-02-07 -->
+<!-- Generated: 2026-01-30 | Updated: 2026-02-08 -->
 
 # mnemo
 
@@ -8,6 +8,7 @@
 **Memory for AI-assisted development** — Indexes AI coding sessions from 12+ tools (Claude Code, OpenCode, Gemini CLI, Cursor, etc.) into a unified, searchable SQLite database with FTS5 full-text search.
 
 **Status**: Active development, Production-ready
+**Version**: 1.3.0
 
 ## Key Files
 
@@ -41,7 +42,7 @@ mnemo/
 │   ├── index_antigravity.go     # Antigravity adapter (JSONL)
 │   ├── index_vscode.go          # VS Code AI chat adapter (SQLite)
 │   ├── search.go                # Full-text search command
-│   ├── serve.go                 # MCP server
+│   ├── serve.go                 # MCP server (4 tools: search, context, recent, tools)
 │   ├── blocks.go                # 5-hour usage block display
 │   ├── projects.go              # Project management
 │   ├── tools.go                 # Tool detection + path helpers
@@ -49,18 +50,23 @@ mnemo/
 │   ├── install.go               # Plugin installer
 │   ├── context.go               # Context generation
 │   ├── recent.go                # Recent sessions display
+│   ├── status.go                # System status display
+│   ├── version.go               # Version info
 │   └── onboarding.go            # First-run experience
 ├── internal/
 │   ├── db/                      # SQLite database layer
-│   │   ├── sqlite.go            # Schema, migrations, init
-│   │   ├── messages.go          # Message struct + InsertMessage
-│   │   ├── sessions.go          # Session CRUD + GetRecentSessions
-│   │   ├── search.go            # FTS5 search + BM25 ranking
-│   │   ├── projects.go          # Project management + classification
-│   │   ├── token_usage.go       # Token/cost tracking + API credentials
+│   │   ├── sqlite.go            # Schema, migrations, init, execer interface
+│   │   ├── messages.go          # Message CRUD (with Tx variants)
+│   │   ├── sessions.go          # Session CRUD + typed RecentSession queries
+│   │   ├── search.go            # FTS5 search + BM25 composite ranking
+│   │   ├── projects.go          # Project discovery + classification
+│   │   ├── token_usage.go       # Token/cost tracking + typed stats structs
 │   │   └── blocks.go            # 5-hour session blocks + usage stats
 │   └── tui/                     # Bubble Tea TUI components
-├── proxy/                       # HTTP proxy for Claude API injection
+│       ├── styles.go            # Catppuccin color palette + shared styles
+│       └── projects.go          # Interactive project selector
+├── proxy/                       # HTTP proxy for Claude API context injection
+│   └── server.go                # Intercepts API calls, injects mnemo context
 ├── docs/                        # Documentation
 ├── assets/                      # Media assets
 └── scripts/                     # Build and automation scripts
@@ -82,20 +88,20 @@ mnemo/
 CLI Commands (cmd/)
   ↓
 Tool Adapters (cmd/index_*.go)
-  ↓  parse JSONL / JSON / SQLite
+  ↓  parse JSONL / JSON / SQLite → atomic transactions
 internal/db/
-  ├── sqlite.go        → Schema + init
-  ├── messages.go      → Insert normalized messages
-  ├── sessions.go      → Session tracking
-  ├── search.go        → FTS5 full-text search
-  ├── projects.go      → Project discovery
-  ├── token_usage.go   → Token/cost accounting
+  ├── sqlite.go        → Schema + init + execer interface + BeginTx
+  ├── messages.go      → Insert/delete messages (DB + Tx variants)
+  ├── sessions.go      → Session tracking (DB + Tx variants)
+  ├── search.go        → FTS5 full-text search + BM25 ranking
+  ├── projects.go      → Project discovery + classification
+  ├── token_usage.go   → Token/cost accounting + typed stats
   └── blocks.go        → Usage block analysis
   ↓
 SQLite Database (~/.mnemo/mnemo.db)
 ```
 
-### Common Patterns
+### Key Design Patterns
 
 - **Cobra CLI**: All commands use cobra framework
 - **Bubble Tea TUI**: Interactive experiences use charmbracelet/bubbletea
@@ -103,6 +109,40 @@ SQLite Database (~/.mnemo/mnemo.db)
 - **One adapter per file**: Each tool gets its own `cmd/index_<tool>.go`
 - **MCP Integration**: Model Context Protocol server for Claude Desktop/Cursor
 - **Pure Go SQLite**: modernc.org/sqlite — no CGO, no system dependencies
+- **execer interface**: Abstracts `*sql.DB` and `*sql.Tx` so insert/delete helpers work with both
+- **Atomic transactions**: All indexers wrap delete+insert in a transaction via `BeginTx()` to prevent data loss from partial writes
+- **Typed returns**: DB query functions return typed structs (`RecentSession`, `UsageStats`, `TokenStats`, etc.) instead of `map[string]interface{}`
+- **Scan error logging**: All `rows.Scan` errors are logged via `log.Printf` before continuing
+- **WAL mode**: Single-writer via `db.SetMaxOpenConns(1)`, WAL for concurrent reads
+- **Snippet delimiters**: `⟪` / `⟫` (Unicode) to avoid XML injection
+
+### Transaction Pattern
+
+All indexers use this pattern for atomic writes:
+
+```go
+tx, err := db.BeginTx()
+if err != nil { return }
+defer func() { _ = tx.Rollback() }()
+
+db.TxDeleteSessionMessages(tx, sessionID)
+// ... insert messages ...
+db.TxInsertSession(tx, session)
+
+if err := tx.Commit(); err != nil { return }
+```
+
+Multi-session indexers (cursor, vscode, codex_history) use a closure pattern:
+```go
+for _, session := range sessions {
+    func() {
+        tx, _ := db.BeginTx()
+        defer func() { _ = tx.Rollback() }()
+        // ... per-session writes ...
+        tx.Commit()
+    }()
+}
+```
 
 ### Testing
 
@@ -127,6 +167,8 @@ go test -v -race ./...  # Verbose with race detection
 | `mnemo add` | Index a custom path | `mnemo add ~/docs` |
 | `mnemo serve` | Start MCP server | `mnemo serve` |
 | `mnemo install` | Install plugins/MCP config | `mnemo install claude-code` |
+| `mnemo status` | Show system status | `mnemo status` |
+| `mnemo version` | Print version info | `mnemo version` |
 
 ## Dependencies
 

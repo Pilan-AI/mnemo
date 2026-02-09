@@ -1,3 +1,5 @@
+// index_opencode.go indexes OpenCode sessions stored as JSON files.
+// Sessions live under ~/.local/share/opencode/sessions/<session-id>/.
 package cmd
 
 import (
@@ -10,6 +12,8 @@ import (
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
+// indexOpencode walks the OpenCode sessions directory and indexes each session.
+// Returns total (sessions, messages) indexed.
 func indexOpencode(basePath string) (int, int) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -40,6 +44,10 @@ func indexOpencode(basePath string) (int, int) {
 		}
 
 		sessionID := sessionDir.Name()
+		// Incremental: skip if session file hasn't changed
+		if info, err := sessionDir.Info(); err == nil && isSessionUnchanged(sessionID, info.ModTime()) {
+			continue
+		}
 		s, m := indexOpenCodeSession(storagePath, sessionID)
 		totalSessions += s
 		totalMessages += m
@@ -48,6 +56,8 @@ func indexOpencode(basePath string) (int, int) {
 	return totalSessions, totalMessages
 }
 
+// indexOpenCodeSession parses a single OpenCode session directory containing
+// session.json (metadata) and messages.json (conversation), inserting atomically.
 func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 	messagePath := filepath.Join(storagePath, "message", sessionID)
 	partBasePath := filepath.Join(storagePath, "part")
@@ -80,6 +90,18 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 	var totalInputTokens, totalOutputTokens, totalCacheRead, totalCacheWrite, totalReasoningTokens int
 	var totalCostUSD float64
 	msgCount := 0
+
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+		indexErrors++
+		return 0, 0
+	}
 
 	for _, msgFile := range messageFiles {
 		if msgFile.IsDir() || !strings.HasPrefix(msgFile.Name(), "msg_") {
@@ -160,7 +182,6 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			}
 			if v, ok := tokensMap["reasoning"].(float64); ok {
 				reasoning = int(v)
-				outputTokens += reasoning
 			}
 			if cacheMap, ok := tokensMap["cache"].(map[string]interface{}); ok {
 				if v, ok := cacheMap["read"].(float64); ok {
@@ -193,13 +214,11 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			sessionEndTime = msgTimestamp
 		}
 
-		msgCount++
-
 		if role == "user" && firstUserMsg == "" && !isSystemDirective(content) {
 			firstUserMsg = truncate(sanitizeContent(content), 200)
 		}
 
-		_ = db.InsertMessage(db.Message{
+		if err := db.TxInsertMessage(tx, db.Message{
 			SessionID:        sessionID,
 			Project:          projectName,
 			Role:             role,
@@ -215,7 +234,12 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			ReasoningTokens:  reasoning,
 			CostUSD:          costUSD,
 			Date:             msgDate,
-		})
+		}); err != nil {
+			indexErrors++
+			continue
+		}
+
+		msgCount++
 	}
 
 	if msgCount > 0 {
@@ -233,7 +257,7 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 		if !sessionStartTime.IsZero() {
 			sessionDate = sessionStartTime.Format("2006-01-02")
 		}
-		_ = db.InsertSession(db.Session{
+		if err := db.TxInsertSession(tx, db.Session{
 			ID:                   sessionID,
 			Project:              projectName,
 			FirstQuery:           sessionQuery,
@@ -253,7 +277,14 @@ func indexOpenCodeSession(storagePath, sessionID string) (int, int) {
 			StartTime:            sessionStartTime,
 			EndTime:              sessionEndTime,
 			Date:                 sessionDate,
-		})
+		}); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
 		return 1, msgCount
 	}
 

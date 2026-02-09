@@ -2,7 +2,7 @@
 
 **Instant local search and indexing across all your AI coding sessions.**
 
-Hi all! I'm Raghu. I'm an average Claude Code and OpenCode user. When I ran the numbers, I had 89,037 messages sitting across my AI coding tools. While organizing those chats, I realized they weren't just conversations — they were my 'decision journals'. Why I picked one architecture over another, how I debugged that weird race condition at 2am, what trade-offs I accepted and why. All of it scattered across 12 different tools in 5 different formats.
+Hi all! I'm Raghu. I'm an average Claude Code and OpenCode user. When I ran the numbers, I had 89,037 messages sitting across my AI coding tools. While organizing those chats, I realized they weren't just conversations — they were my 'decision journals'. Why I picked one architecture over another, how I debugged that weird race condition at 2am, what trade-offs I accepted and why. All of it scattered across 12 different tools in 3 different formats.
 
 So I built mnemo. It indexes everything into one local SQLite database and gives you full-text search across all of it. No cloud, no accounts, everything stays on your machine.
 
@@ -123,6 +123,7 @@ Search results delivered through MCP use the same session-grouped ranking as the
 | `mnemo projects` | Manage tracked project directories |
 | `mnemo install` | Install plugins and MCP config |
 | `mnemo add <path>` | Index a custom path |
+| `mnemo version` | Print version and build info |
 
 ## How it works
 
@@ -130,9 +131,9 @@ Search results delivered through MCP use the same session-grouped ranking as the
 graph TD
     subgraph inputs["Data Sources — 12 AI Tools"]
         direction LR
-        jsonl["JSONL<br/><small>Claude Code · Cursor<br/>Cline · Roo Code · Kilo Code</small>"]
-        json["JSON<br/><small>Gemini CLI · OpenCode<br/>Codex · Amp · Crush</small>"]
-        custom["Custom<br/><small>Kiro · Antigravity</small>"]
+        jsonl["JSONL<br/><small>Claude Code · Codex · Antigravity</small>"]
+        json["JSON<br/><small>OpenCode · Gemini CLI · Amp<br/>Kiro · Cline · Roo · Kilo</small>"]
+        sqlite["SQLite<br/><small>Cursor · Crush · VS Code</small>"]
     end
 
     subgraph indexer["mnemo index"]
@@ -151,7 +152,7 @@ graph TD
 
     jsonl --> indexer
     json --> indexer
-    custom --> indexer
+    sqlite --> indexer
     detect --> parse --> dedupe --> normalize
 
     indexer --> db
@@ -169,7 +170,7 @@ graph TD
     style db fill:#0a1628,stroke:#5855E640,color:#e8ecf1
     style jsonl fill:#00D9FF15,stroke:#00D9FF40,color:#00D9FF
     style json fill:#10B98115,stroke:#10B98140,color:#10B981
-    style custom fill:#FF950A15,stroke:#FF950A40,color:#FF950A
+    style sqlite fill:#FF950A15,stroke:#FF950A40,color:#FF950A
     style cli fill:#00D9FF10,stroke:#00D9FF30,color:#00D9FF
     style mcp fill:#5855E610,stroke:#5855E630,color:#5855E6
     style pilan fill:#8E3ED310,stroke:#8E3ED330,color:#8E3ED3

@@ -46,7 +46,7 @@ func init() {
 func serveMCP() error {
 	s := server.NewMCPServer(
 		"mnemo",
-		"1.0.0",
+		Version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
 	)
@@ -54,6 +54,7 @@ func serveMCP() error {
 	if err := db.InitDB(); err != nil {
 		return fmt.Errorf("failed to initialize database: %w", err)
 	}
+	defer db.CloseDB()
 
 	searchTool := mcp.NewTool("mnemo_search",
 		mcp.WithDescription("Search across all indexed AI coding conversations"),
@@ -78,7 +79,14 @@ func serveMCP() error {
 		limit := request.GetInt("limit", 5)
 		projectFilter := request.GetString("project", "")
 
-		results, err := db.SearchGrouped(query, limit)
+		// When filtering by project, search with a higher limit to avoid missing
+		// relevant results that would be pushed beyond the limit threshold.
+		searchLimit := limit
+		if projectFilter != "" {
+			searchLimit = limit * 5
+		}
+
+		results, err := db.SearchGrouped(query, searchLimit)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("search failed: %v", err)), nil
 		}
@@ -88,13 +96,16 @@ func serveMCP() error {
 		}
 
 		if projectFilter != "" {
-			filtered := make([]db.SessionMatch, 0)
+			filtered := make([]db.SessionMatch, 0, limit)
 			for _, r := range results {
 				if strings.EqualFold(r.Project, projectFilter) {
 					filtered = append(filtered, r)
 				}
 			}
 			results = filtered
+			if len(results) > limit {
+				results = results[:limit]
+			}
 		}
 
 		// Tier 2: Token-efficient structured output for AI context injection
@@ -194,15 +205,10 @@ func serveMCP() error {
 		output.WriteString(fmt.Sprintf("Recent sessions (limit %d):\n\n", limit))
 
 		for i, session := range sessions {
-			project := session["project"].(string)
-			firstQuery := session["firstQuery"].(string)
-			msgCount := session["messages"].(int)
-			tool := session["tool"].(string)
-
-			output.WriteString(fmt.Sprintf("[%d] %s\n", i+1, project))
-			output.WriteString(fmt.Sprintf("    First query: %s\n", shorten(firstQuery, 80)))
-			output.WriteString(fmt.Sprintf("    Messages: %d\n", msgCount))
-			output.WriteString(fmt.Sprintf("    Tool: %s\n\n", tool))
+			output.WriteString(fmt.Sprintf("[%d] %s\n", i+1, session.Project))
+			output.WriteString(fmt.Sprintf("    First query: %s\n", shorten(session.FirstQuery, 80)))
+			output.WriteString(fmt.Sprintf("    Messages: %d\n", session.MessageCount))
+			output.WriteString(fmt.Sprintf("    Tool: %s\n\n", session.Tool))
 		}
 
 		return mcp.NewToolResultText(output.String()), nil
@@ -247,14 +253,19 @@ func serveMCP() error {
 	return nil
 }
 
+// Tool represents a detected AI coding tool for the MCP tools endpoint.
 type Tool struct {
 	Name      string
 	Path      string
 	Installed bool
 }
 
+// detectTools checks for known AI coding tool installations on the local system.
 func detectTools() []Tool {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
 	tools := []Tool{
 		{Name: "Claude Code", Path: filepath.Join(home, ".claude", "projects")},
 		{Name: "Opencode", Path: filepath.Join(home, ".local", "share", "opencode")},

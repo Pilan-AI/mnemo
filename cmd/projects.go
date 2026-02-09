@@ -20,7 +20,11 @@ var projectsCmd = &cobra.Command{
 	Short: "Manage tracked projects",
 	Long:  "View and manage which projects mnemo tracks for AI session indexing.",
 	Run: func(cmd *cobra.Command, args []string) {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error: cannot determine home directory: %v\n", err)
+			return
+		}
 		dbPath := filepath.Join(home, ".mnemo", "mnemo.db")
 
 		if !pathExists(dbPath) {
@@ -155,7 +159,11 @@ var projectsAddCmd = &cobra.Command{
 		defer db.CloseDB()
 
 		path := args[0]
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error: cannot determine home directory: %v\n", err)
+			return
+		}
 		if len(path) > 0 && path[0] == '~' {
 			path = filepath.Join(home, path[1:])
 		}
@@ -259,19 +267,31 @@ This will:
 		}
 		defer db.CloseDB()
 
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error: cannot determine home directory: %v\n", err)
+			return
+		}
 
 		oldPath := args[0]
 		if len(oldPath) > 0 && oldPath[0] == '~' {
 			oldPath = filepath.Join(home, oldPath[1:])
 		}
-		oldPath, _ = filepath.Abs(oldPath)
+		oldPath, err = filepath.Abs(oldPath)
+		if err != nil {
+			fmt.Printf("Error resolving old path: %v\n", err)
+			return
+		}
 
 		newPath := args[1]
 		if len(newPath) > 0 && newPath[0] == '~' {
 			newPath = filepath.Join(home, newPath[1:])
 		}
-		newPath, _ = filepath.Abs(newPath)
+		newPath, err = filepath.Abs(newPath)
+		if err != nil {
+			fmt.Printf("Error resolving new path: %v\n", err)
+			return
+		}
 
 		if !pathExists(newPath) {
 			fmt.Printf("Warning: New path does not exist: %s\n", newPath)

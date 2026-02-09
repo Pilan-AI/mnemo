@@ -15,8 +15,10 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -33,16 +35,38 @@ func GetDB() *sql.DB {
 // applies the schema and any pending migrations. Uses WAL mode for
 // concurrent read access.
 func InitDB() error {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
 	mnemoDir := filepath.Join(home, ".mnemo")
-	_ = os.MkdirAll(mnemoDir, 0755)
+	if err := os.MkdirAll(mnemoDir, 0700); err != nil {
+		return fmt.Errorf("failed to create mnemo directory: %w", err)
+	}
 
 	dbPath := filepath.Join(mnemoDir, "mnemo.db")
 
-	var err error
-	db, err = sql.Open("sqlite", dbPath+"?_synchronous=NORMAL&_journal_mode=WAL&_cache_size=-10000&_temp_store=MEMORY")
+	db, err = sql.Open("sqlite", dbPath+"?_synchronous=NORMAL&_journal_mode=WAL&_cache_size=-10000&_temp_store=MEMORY&_busy_timeout=5000")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
+	}
+
+	// SQLite is single-writer; limit connections to prevent "database is locked" errors
+	db.SetMaxOpenConns(1)
+
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	// Verify database integrity on open
+	var integrityResult string
+	if err := db.QueryRow("PRAGMA integrity_check(1)").Scan(&integrityResult); err == nil && integrityResult != "ok" {
+		log.Printf("warning: database integrity check failed: %s", integrityResult)
+	}
+
+	// Set file permissions: owner read/write only
+	if err := os.Chmod(dbPath, 0600); err != nil {
+		log.Printf("warning: failed to set database permissions: %v", err)
 	}
 
 	schema := `
@@ -145,6 +169,10 @@ func InitDB() error {
 	CREATE INDEX IF NOT EXISTS idx_sessions_model ON sessions(model);
 	CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id);
 	CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time);
+	CREATE INDEX IF NOT EXISTS idx_sessions_indexed_at ON sessions(indexed_at);
+	CREATE INDEX IF NOT EXISTS idx_token_usage_provider ON token_usage(provider);
+	CREATE INDEX IF NOT EXISTS idx_sessions_working_directory ON sessions(working_directory);
 
 	CREATE TABLE IF NOT EXISTS projects (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -173,8 +201,8 @@ func InitDB() error {
 }
 
 // runMigrations applies schema additions idempotently.
-// Each ALTER TABLE is fire-and-forget — if the column already exists, the
-// error is silently ignored. This avoids needing a migration version table.
+// Only "duplicate column name" errors are suppressed (column already exists).
+// All other errors (disk full, locked, corruption) are propagated.
 func runMigrations() error {
 	migrations := []string{
 		"ALTER TABLE messages ADD COLUMN model TEXT DEFAULT ''",
@@ -206,26 +234,54 @@ func runMigrations() error {
 	}
 
 	for _, migration := range migrations {
-		_, _ = db.Exec(migration)
+		_, err := db.Exec(migration)
+		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migration failed (%s): %w", migration, err)
+		}
 	}
 
 	return nil
 }
 
+// CloseDB closes the global database connection.
 func CloseDB() {
 	if db != nil {
-		_ = db.Close()
+		if err := db.Close(); err != nil {
+			log.Printf("warning: failed to close database cleanly: %v", err)
+		}
 	}
 }
 
-func OpenReadOnlySQLite(path string) (*sql.DB, error) {
-	return sql.Open("sqlite", path+"?mode=ro")
+// execer abstracts *sql.DB and *sql.Tx for shared insert/delete helpers.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// BeginTx starts a new database transaction for atomic multi-step operations.
+func BeginTx() (*sql.Tx, error) {
+	return db.Begin()
+}
+
+// OpenReadOnlySQLite opens an external SQLite database in read-only mode
+// for indexing tool-specific databases (e.g. Cursor's state.vscdb, Crush's crush.db).
+func OpenReadOnlySQLite(path string) (*sql.DB, error) {
+	conn, err := sql.Open("sqlite", path+"?mode=ro&_busy_timeout=3000")
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to open %s: %w", filepath.Base(path), err)
+	}
+	return conn, nil
+}
+
+// ClearIndex drops all data from messages, sessions, and token_usage tables.
 func ClearIndex() error {
+	// messages_fts cleanup is handled by the messages_ad trigger on DELETE,
+	// so we only need to delete from the base tables.
 	_, err := db.Exec(`
 		DELETE FROM messages;
-		DELETE FROM messages_fts;
 		DELETE FROM sessions;
 		DELETE FROM token_usage;
 	`)
