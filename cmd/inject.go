@@ -215,20 +215,16 @@ func formatInjectionContext(results []db.SessionMatch) string {
 	return sb.String()
 }
 
-// printHookResult outputs the Claude Code hook JSON response.
-func printHookResult(additionalContext string, message string) {
-	result := map[string]any{
-		"result": "proceed",
-	}
+// printHookResult outputs the Claude Code hook response.
+// For UserPromptSubmit, plain text stdout is added as context per the docs.
+// Only use JSON when blocking a prompt (decision: "block").
+func printHookResult(additionalContext string, _ string) {
 	if additionalContext != "" {
-		result["additionalContext"] = additionalContext
+		// Plain text stdout is injected as context for UserPromptSubmit
+		fmt.Println(additionalContext)
+		return
 	}
-	if message != "" {
-		result["message"] = message
-	}
-
-	data, _ := json.Marshal(result)
-	fmt.Println(string(data))
+	// No context — exit cleanly (exit 0 with no output = allow prompt)
 }
 
 // readPromptFromStdin reads the user's prompt from Claude Code hook JSON on stdin.

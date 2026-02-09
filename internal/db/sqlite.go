@@ -257,7 +257,7 @@ func InitReadOnly() error {
 		return fmt.Errorf("database not found: %w", err)
 	}
 
-	db, err = sql.Open("sqlite", dbPath+"?mode=ro&_journal_mode=WAL&_cache_size=-10000&_temp_store=MEMORY&_busy_timeout=2000")
+	db, err = sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(2000)&_pragma=cache_size(-10000)&_pragma=temp_store(MEMORY)")
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
