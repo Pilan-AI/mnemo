@@ -702,6 +702,40 @@ func runOnboarding() {
 		}
 	}
 
+	// Injection mode selection
+	fmt.Println()
+	fmt.Printf("  %s\n", dim.Render("Context injection automatically surfaces relevant past sessions"))
+	fmt.Printf("  %s\n", dim.Render("alongside your prompts in Claude Code and OpenCode."))
+	fmt.Println()
+	fmt.Println("  Choose injection mode:")
+	fmt.Printf("    %s  No auto-injection (use /remember manually)\n", dim.Render("[1] off"))
+	fmt.Printf("    %s  Inject only for code/debug prompts\n", dim.Render("[2] helper"))
+	fmt.Printf("    %s  Inject relevant context with every prompt\n", green.Render("[3] assistant (recommended)"))
+	fmt.Println()
+	fmt.Printf("  Select [1/2/3]: ")
+	modeAnswer, _ := reader.ReadString('\n')
+	modeAnswer = strings.TrimSpace(modeAnswer)
+	injectionMode := "assistant" // default
+	switch modeAnswer {
+	case "1":
+		injectionMode = "off"
+	case "2":
+		injectionMode = "helper"
+	}
+	// Write injection mode to config
+	mnemoDir := filepath.Join(home, ".mnemo")
+	configPath := filepath.Join(mnemoDir, "config.json")
+	existingConfig := make(map[string]any)
+	if configData, err := os.ReadFile(configPath); err == nil {
+		_ = json.Unmarshal(configData, &existingConfig)
+	}
+	existingConfig["injection_mode"] = injectionMode
+	if configData, err := json.MarshalIndent(existingConfig, "", "  "); err == nil {
+		_ = os.WriteFile(configPath, configData, 0644)
+	}
+	fmt.Printf("  %s injection mode: %s\n", green.Render("✓"), cyan.Render(injectionMode))
+	fmt.Printf("  %s\n", dim.Render("Change later with: mnemo configure <off|helper|assistant>"))
+
 	// Spawn full index in background for complete history
 	fmt.Println()
 	if exe, err := os.Executable(); err == nil {
@@ -711,7 +745,6 @@ func runOnboarding() {
 		bgCmd.Stdin = nil
 		if bgCmd.Start() == nil {
 			// Write .indexing status file
-			mnemoDir := filepath.Join(home, ".mnemo")
 			indexingPath := filepath.Join(mnemoDir, ".indexing")
 			indexingData, _ := json.Marshal(map[string]interface{}{
 				"pid":     bgCmd.Process.Pid,

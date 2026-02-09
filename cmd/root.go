@@ -18,6 +18,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,16 +70,35 @@ Available modes:
 		}
 
 		configPath := filepath.Join(mnemoDir, "config.json")
-		config := fmt.Sprintf(`{
-  "injection_mode": "%s"
- }`, mode)
 
-		if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+		// Read existing config to preserve other fields
+		existing := make(map[string]any)
+		if data, err := os.ReadFile(configPath); err == nil {
+			_ = json.Unmarshal(data, &existing)
+		}
+
+		// Merge injection_mode into existing config
+		existing["injection_mode"] = mode
+
+		data, err := json.MarshalIndent(existing, "", "  ")
+		if err != nil {
+			fmt.Printf("Error encoding config: %v\n", err)
+			os.Exit(1)
+		}
+
+		if err := os.WriteFile(configPath, data, 0644); err != nil {
 			fmt.Printf("Error saving config: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Printf("✓ mnemo injection mode set to: %s\n", mode)
+		fmt.Printf("mnemo injection mode set to: %s\n", mode)
+		fmt.Println()
+		modeDescriptions := map[string]string{
+			"off":       "No auto-injection. Use /remember or /recall manually.",
+			"helper":    "Injects context only for code/debug prompts (keyword-filtered).",
+			"assistant": "Injects relevant context with every prompt.",
+		}
+		fmt.Printf("  %s\n", modeDescriptions[mode])
 		fmt.Println("\nRestart your AI tool (Claude Code / OpenCode) to apply changes.")
 	},
 }
@@ -95,7 +115,7 @@ Your AI coding sessions — indexed, searchable, never forgotten.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Skip onboarding for commands that don't need it
 		name := cmd.Name()
-		if name == "onboarding" || name == "version" || name == "help" || name == "completion" || name == "status" {
+		if name == "onboarding" || name == "version" || name == "help" || name == "completion" || name == "status" || name == "inject" {
 			return
 		}
 
