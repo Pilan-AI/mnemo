@@ -213,6 +213,12 @@ func installLaunchdAgent(home, mnemoPath string) string {
 </dict>
 </plist>`, label, mnemoPath)
 
+	// Skip write+load if plist already exists with identical content.
+	// Re-registering triggers macOS "Background Activity" notifications.
+	if existing, err := os.ReadFile(plistPath); err == nil && string(existing) == plist {
+		return "  ✓ Background indexer active (every 30 min)"
+	}
+
 	if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
 		return ""
 	}
@@ -253,6 +259,13 @@ WantedBy=timers.target
 
 	servicePath := filepath.Join(unitDir, "mnemo-index.service")
 	timerPath := filepath.Join(unitDir, "mnemo-index.timer")
+
+	// Skip if both files already exist with identical content
+	existingService, sErr := os.ReadFile(servicePath)
+	existingTimer, tErr := os.ReadFile(timerPath)
+	if sErr == nil && tErr == nil && string(existingService) == service && string(existingTimer) == timer {
+		return "  ✓ Background indexer active (every 30 min)"
+	}
 
 	if os.WriteFile(servicePath, []byte(service), 0644) != nil {
 		return ""
