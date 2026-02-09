@@ -700,6 +700,9 @@ func runOnboarding() {
 		for _, r := range results {
 			fmt.Println(r)
 		}
+		fmt.Println()
+		fmt.Printf("  %s\n", dim.Render("Tip: Open Raycast and type \"Mnemo\" to search sessions from anywhere."))
+		fmt.Printf("  %s\n", dim.Render("     Claude Code and OpenCode get auto-context injection."))
 	}
 
 	// Injection mode selection

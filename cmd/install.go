@@ -52,6 +52,7 @@ directly in Claude Desktop.`,
 		fmt.Println("  - Claude Code: Skill auto-activates on context keywords")
 		fmt.Println("  - Claude Desktop: MCP tools (mnemo_search, mnemo_context, mnemo_recent)")
 		fmt.Println("  - OpenCode: Context survives session compaction")
+		fmt.Println("  - Raycast: Search, context, and recent commands (macOS)")
 		fmt.Println("  - Background indexer: Sessions re-indexed every 30 minutes")
 		fmt.Println()
 		fmt.Println("Note: Restart Claude Desktop to activate MCP server.")
@@ -158,6 +159,13 @@ func runInstallPlugins(home string) []string {
 		if os.WriteFile(pluginPath, []byte(opencodePlugin), 0644) == nil &&
 			os.WriteFile(pkgPath, []byte(opencodePackageJSON), 0644) == nil {
 			results = append(results, "  ✓ OpenCode plugin installed")
+		}
+	}
+
+	// Raycast script commands (macOS only)
+	if runtime.GOOS == "darwin" {
+		if r := installRaycastScripts(home, mnemoPath); r != "" {
+			results = append(results, r)
 		}
 	}
 
@@ -282,6 +290,122 @@ WantedBy=timers.target
 	}
 
 	return "  ✓ Background indexer active (every 30 min)"
+}
+
+// installRaycastScripts copies mnemo script commands into Raycast's directory.
+// Only runs if Raycast.app is detected on macOS.
+func installRaycastScripts(home, mnemoPath string) string {
+	raycastApp := "/Applications/Raycast.app"
+	if _, err := os.Stat(raycastApp); err != nil {
+		return ""
+	}
+
+	scriptDir := filepath.Join(home, "Library", "Application Support", "Raycast", "Script Commands")
+	if err := os.MkdirAll(scriptDir, 0755); err != nil {
+		return ""
+	}
+
+	pathExport := fmt.Sprintf(`export PATH="%s:$HOME/bin:$HOME/go/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"`,
+		filepath.Dir(mnemoPath))
+
+	scripts := []struct {
+		name    string
+		content string
+	}{
+		{"mnemo-search.sh", fmt.Sprintf(`#!/bin/bash
+
+# Required parameters:
+# @raycast.schemaVersion 1
+# @raycast.mode fullOutput
+
+# Optional parameters:
+# @raycast.icon 🔍
+# @raycast.packageName Mnemo
+# @raycast.title Mnemo: Search
+# @raycast.description Search past AI sessions and knowledge
+# @raycast.author 0xraghu
+# @raycast.authorURL https://github.com/Pilan-AI/mnemo
+
+# Documentation:
+# @raycast.argument1 { "type": "text", "placeholder": "Enter search query" }
+
+%s
+
+QUERY="$1"
+
+if [ -z "$QUERY" ]; then
+    echo "Usage: mnemo-search <query>"
+    exit 1
+fi
+
+mnemo search "$QUERY" 2>&1
+
+exit 0
+`, pathExport)},
+		{"mnemo-context.sh", fmt.Sprintf(`#!/bin/bash
+
+# Required parameters:
+# @raycast.schemaVersion 1
+# @raycast.mode fullOutput
+
+# Optional parameters:
+# @raycast.icon 📦
+# @raycast.packageName Mnemo
+# @raycast.title Mnemo: Context
+# @raycast.description Get mnemo context for a project
+# @raycast.author 0xraghu
+# @raycast.authorURL https://github.com/Pilan-AI/mnemo
+
+# Documentation:
+# @raycast.argument1 { "type": "text", "placeholder": "Project name" }
+
+%s
+
+PROJECT="$1"
+
+if [ -z "$PROJECT" ]; then
+    echo "Usage: mnemo-context <project name>"
+    exit 1
+fi
+
+mnemo context "$PROJECT" 2>&1
+
+exit 0
+`, pathExport)},
+		{"mnemo-recent.sh", fmt.Sprintf(`#!/bin/bash
+
+# Required parameters:
+# @raycast.schemaVersion 1
+# @raycast.mode fullOutput
+
+# Optional parameters:
+# @raycast.icon 📋
+# @raycast.packageName Mnemo
+# @raycast.title Mnemo: Recent
+# @raycast.description Show recent AI coding sessions
+# @raycast.author 0xraghu
+# @raycast.authorURL https://github.com/Pilan-AI/mnemo
+
+%s
+
+mnemo recent -d 7 2>&1
+
+exit 0
+`, pathExport)},
+	}
+
+	installed := 0
+	for _, s := range scripts {
+		scriptPath := filepath.Join(scriptDir, s.name)
+		if err := os.WriteFile(scriptPath, []byte(s.content), 0755); err == nil {
+			installed++
+		}
+	}
+
+	if installed == len(scripts) {
+		return "  ✓ Raycast script commands installed"
+	}
+	return ""
 }
 
 func init() {

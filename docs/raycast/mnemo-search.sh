@@ -15,6 +15,9 @@
 # Documentation:
 # @raycast.argument1 { "type": "text", "placeholder": "Enter search query" }
 
+# Ensure mnemo is in PATH (Raycast doesn't inherit shell PATH)
+export PATH="$HOME/bin:$HOME/go/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 QUERY="$1"
 
 if [ -z "$QUERY" ]; then
