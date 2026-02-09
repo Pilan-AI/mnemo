@@ -1,9 +1,12 @@
 package cmd
 
 // inject.go implements the UserPromptSubmit hook for Claude Code.
-// It reads the user's prompt from CLAUDE_USER_PROMPT env var,
+// It reads the user's prompt from stdin JSON (Claude Code hook protocol),
 // checks the injection_mode from config, searches mnemo, and
 // returns additionalContext as JSON to stdout.
+//
+// Claude Code passes hook input as JSON on stdin:
+//   {"prompt": "user message", "session_id": "...", "hook_event_name": "UserPromptSubmit"}
 //
 // Usage in hooks.json:
 //   { "type": "command", "command": "mnemo inject", "timeout": 5 }
@@ -11,6 +14,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +28,7 @@ var injectCmd = &cobra.Command{
 	Short:  "Context injection hook for Claude Code (UserPromptSubmit)",
 	Hidden: true, // Internal command, not shown in help
 	Run: func(cmd *cobra.Command, args []string) {
-		prompt := os.Getenv("CLAUDE_USER_PROMPT")
+		prompt := readPromptFromStdin()
 		if prompt == "" {
 			// No prompt available, pass through
 			printHookResult("", "")
@@ -225,6 +229,27 @@ func printHookResult(additionalContext string, message string) {
 
 	data, _ := json.Marshal(result)
 	fmt.Println(string(data))
+}
+
+// readPromptFromStdin reads the user's prompt from Claude Code hook JSON on stdin.
+// Falls back to CLAUDE_USER_PROMPT env var for backward compatibility.
+func readPromptFromStdin() string {
+	// Try reading JSON from stdin (Claude Code hook protocol)
+	stat, err := os.Stdin.Stat()
+	if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
+		data, err := io.ReadAll(io.LimitReader(os.Stdin, 64*1024))
+		if err == nil && len(data) > 0 {
+			var input map[string]any
+			if json.Unmarshal(data, &input) == nil {
+				if p, ok := input["prompt"].(string); ok && p != "" {
+					return p
+				}
+			}
+		}
+	}
+
+	// Fallback: env var (for manual testing)
+	return os.Getenv("CLAUDE_USER_PROMPT")
 }
 
 func init() {
