@@ -10,8 +10,8 @@ import (
 
 // Build-time variables, overridden via -ldflags during goreleaser builds.
 var (
-	Version   = "1.3.0"
-	BuildDate = "2026-02-08"
+	Version   = "1.3.1"
+	BuildDate = "2026-02-09"
 	GitCommit = "dev"
 )
 

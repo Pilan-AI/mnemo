@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] - 2026-02-09
+
+### Fixed
+- **Context injection not working**: `mnemo inject` now reads the user prompt from stdin JSON (Claude Code hook protocol) instead of the non-existent `CLAUDE_USER_PROMPT` env var
+- **Inject command hanging**: Added read-only DB init (`InitReadOnly`) so inject doesn't block on write locks held by `mnemo serve` processes — reduced from timeout to ~0.8s
+- **Headless mode**: Added `IsHeadless()` with `--non-interactive` flag, `CI`/`MNEMO_HEADLESS` env vars, and stdin TTY detection for CI/CD environments
+- **Raycast scripts**: Use absolute `mnemoPath` directly instead of PATH export workaround
+- Consolidated multiple `bufio.NewReader(os.Stdin)` into single reader in onboarding
+- Fixed Go convention: tabs not spaces in `root.go`
+
+---
+
 ## [1.3.0] - 2026-02-08
 
 ### Added
@@ -105,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Initial public release
 
+[1.3.1]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.3.1
 [1.3.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.2.0
 [1.1.0]: https://github.com/Pilan-AI/mnemo/releases/tag/v1.1.0

@@ -243,6 +243,34 @@ func runMigrations() error {
 	return nil
 }
 
+// InitReadOnly opens the mnemo database for read-only access without running
+// schema DDL. Use this for commands like inject that only need to search and
+// must not block on write locks held by other processes.
+func InitReadOnly() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	dbPath := filepath.Join(home, ".mnemo", "mnemo.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return fmt.Errorf("database not found: %w", err)
+	}
+
+	db, err = sql.Open("sqlite", dbPath+"?mode=ro&_journal_mode=WAL&_cache_size=-10000&_temp_store=MEMORY&_busy_timeout=2000")
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+
+	db.SetMaxOpenConns(1)
+
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	return nil
+}
+
 // CloseDB closes the global database connection.
 func CloseDB() {
 	if db != nil {

@@ -8,7 +8,7 @@
 **Memory for AI-assisted development** — Indexes AI coding sessions from 12+ tools (Claude Code, OpenCode, Gemini CLI, Cursor, etc.) into a unified, searchable SQLite database with FTS5 full-text search.
 
 **Status**: Active development, Production-ready
-**Version**: 1.3.0
+**Version**: 1.3.1
 
 ## Key Files
 

@@ -54,8 +54,8 @@ var injectCmd = &cobra.Command{
 			return
 		}
 
-		// Search mnemo for relevant past sessions
-		if err := db.InitDB(); err != nil {
+		// Search mnemo for relevant past sessions (read-only, no DDL)
+		if err := db.InitReadOnly(); err != nil {
 			printHookResult("", "")
 			return
 		}
