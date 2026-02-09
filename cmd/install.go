@@ -162,13 +162,6 @@ func runInstallPlugins(home string) []string {
 		}
 	}
 
-	// Raycast script commands (macOS only)
-	if runtime.GOOS == "darwin" {
-		if r := installRaycastScripts(home, mnemoPath); r != "" {
-			results = append(results, r)
-		}
-	}
-
 	// Background indexer (periodic re-index every 30 min)
 	if r := installBackgroundIndexer(home, mnemoPath); r != "" {
 		results = append(results, r)

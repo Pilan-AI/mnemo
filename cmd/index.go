@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -700,9 +701,39 @@ func runOnboarding() {
 		for _, r := range results {
 			fmt.Println(r)
 		}
-		fmt.Println()
-		fmt.Printf("  %s\n", dim.Render("Tip: Open Raycast and type \"Mnemo\" to search sessions from anywhere."))
-		fmt.Printf("  %s\n", dim.Render("     Claude Code and OpenCode get auto-context injection."))
+	}
+
+	// Raycast integration (macOS only, separate opt-in)
+	if runtime.GOOS == "darwin" {
+		if _, err := os.Stat("/Applications/Raycast.app"); err == nil {
+			fmt.Println()
+			fmt.Printf("Install mnemo commands for Raycast? [Y/n] ")
+			raycastAnswer, _ := reader.ReadString('\n')
+			raycastAnswer = strings.TrimSpace(strings.ToLower(raycastAnswer))
+			if raycastAnswer == "" || raycastAnswer == "y" || raycastAnswer == "yes" {
+				mnemoPath, _ := exec.LookPath("mnemo")
+				if mnemoPath == "" {
+					for _, p := range []string{
+						filepath.Join(home, "bin", "mnemo"),
+						filepath.Join(home, ".local", "bin", "mnemo"),
+						"/usr/local/bin/mnemo",
+						"/opt/homebrew/bin/mnemo",
+					} {
+						if _, err := os.Stat(p); err == nil {
+							mnemoPath = p
+							break
+						}
+					}
+					if mnemoPath == "" {
+						mnemoPath = "mnemo"
+					}
+				}
+				if r := installRaycastScripts(home, mnemoPath); r != "" {
+					fmt.Println(r)
+					fmt.Printf("  %s\n", dim.Render("Tip: Open Raycast and type \"Mnemo\" to search, get context, or view recent sessions."))
+				}
+			}
+		}
 	}
 
 	// Injection mode selection
