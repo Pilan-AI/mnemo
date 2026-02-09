@@ -141,4 +141,23 @@ func Execute() {
 func init() {
 	rootCmd.AddCommand(configureCmd)
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
+	rootCmd.PersistentFlags().Bool("non-interactive", false, "Disable interactive prompts (for CI/headless)")
+}
+
+// IsHeadless returns true if running in a non-interactive environment
+// (CI, non-terminal stdin, or explicit flag/env var).
+func IsHeadless(cmd *cobra.Command) bool {
+	if cmd != nil {
+		if flag, _ := cmd.Flags().GetBool("non-interactive"); flag {
+			return true
+		}
+	}
+	if os.Getenv("CI") != "" || os.Getenv("MNEMO_HEADLESS") != "" {
+		return true
+	}
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return true
+	}
+	return (stat.Mode() & os.ModeCharDevice) == 0
 }

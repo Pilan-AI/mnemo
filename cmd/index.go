@@ -690,72 +690,87 @@ func runOnboarding() {
 	// Clear cutoff for any subsequent operations
 	indexCutoff = time.Time{}
 
-	// Y/n prompt for plugin install
-	fmt.Println()
-	fmt.Printf("Install mnemo plugins for your AI tools? [Y/n] ")
-	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
-	answer = strings.TrimSpace(strings.ToLower(answer))
-	if answer == "" || answer == "y" || answer == "yes" {
+	isHeadless := IsHeadless(nil)
+	injectionMode := "assistant" // default
+
+	if !isHeadless {
+		reader := bufio.NewReader(os.Stdin)
+
+		// Plugin install prompt
+		fmt.Println()
+		fmt.Printf("Install mnemo plugins for your AI tools? [Y/n] ")
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer == "" || answer == "y" || answer == "yes" {
+			results := runInstallPlugins(home)
+			for _, r := range results {
+				fmt.Println(r)
+			}
+		}
+
+		// Raycast integration (macOS only, separate opt-in)
+		if runtime.GOOS == "darwin" {
+			if _, err := os.Stat("/Applications/Raycast.app"); err == nil {
+				fmt.Println()
+				fmt.Printf("Install mnemo commands for Raycast? [Y/n] ")
+				raycastAnswer, _ := reader.ReadString('\n')
+				raycastAnswer = strings.TrimSpace(strings.ToLower(raycastAnswer))
+				if raycastAnswer == "" || raycastAnswer == "y" || raycastAnswer == "yes" {
+					mnemoPath, _ := exec.LookPath("mnemo")
+					if mnemoPath == "" {
+						for _, p := range []string{
+							filepath.Join(home, "bin", "mnemo"),
+							filepath.Join(home, ".local", "bin", "mnemo"),
+							"/usr/local/bin/mnemo",
+							"/opt/homebrew/bin/mnemo",
+						} {
+							if _, err := os.Stat(p); err == nil {
+								mnemoPath = p
+								break
+							}
+						}
+						if mnemoPath == "" {
+							mnemoPath = "mnemo"
+						}
+					}
+					if r := installRaycastScripts(home, mnemoPath); r != "" {
+						fmt.Println(r)
+						fmt.Printf("  %s\n", dim.Render("Tip: Open Raycast and type \"Mnemo\" to search, get context, or view recent sessions."))
+					}
+				}
+			}
+		}
+
+		// Injection mode selection
+		fmt.Println()
+		fmt.Printf("  %s\n", dim.Render("Context injection automatically surfaces relevant past sessions"))
+		fmt.Printf("  %s\n", dim.Render("alongside your prompts in Claude Code and OpenCode."))
+		fmt.Println()
+		fmt.Println("  Choose injection mode:")
+		fmt.Printf("    %s  No auto-injection (use /remember manually)\n", dim.Render("[1] off"))
+		fmt.Printf("    %s  Inject only for code/debug prompts\n", dim.Render("[2] helper"))
+		fmt.Printf("    %s  Inject relevant context with every prompt\n", green.Render("[3] assistant (recommended)"))
+		fmt.Println()
+		fmt.Printf("  Select [1/2/3]: ")
+		modeAnswer, _ := reader.ReadString('\n')
+		modeAnswer = strings.TrimSpace(modeAnswer)
+		switch modeAnswer {
+		case "1":
+			injectionMode = "off"
+		case "2":
+			injectionMode = "helper"
+		}
+	} else {
+		fmt.Println("\nHeadless mode: auto-installing plugins, skipping interactive prompts.")
 		results := runInstallPlugins(home)
 		for _, r := range results {
 			fmt.Println(r)
 		}
-	}
-
-	// Raycast integration (macOS only, separate opt-in)
-	if runtime.GOOS == "darwin" {
-		if _, err := os.Stat("/Applications/Raycast.app"); err == nil {
-			fmt.Println()
-			fmt.Printf("Install mnemo commands for Raycast? [Y/n] ")
-			raycastAnswer, _ := reader.ReadString('\n')
-			raycastAnswer = strings.TrimSpace(strings.ToLower(raycastAnswer))
-			if raycastAnswer == "" || raycastAnswer == "y" || raycastAnswer == "yes" {
-				mnemoPath, _ := exec.LookPath("mnemo")
-				if mnemoPath == "" {
-					for _, p := range []string{
-						filepath.Join(home, "bin", "mnemo"),
-						filepath.Join(home, ".local", "bin", "mnemo"),
-						"/usr/local/bin/mnemo",
-						"/opt/homebrew/bin/mnemo",
-					} {
-						if _, err := os.Stat(p); err == nil {
-							mnemoPath = p
-							break
-						}
-					}
-					if mnemoPath == "" {
-						mnemoPath = "mnemo"
-					}
-				}
-				if r := installRaycastScripts(home, mnemoPath); r != "" {
-					fmt.Println(r)
-					fmt.Printf("  %s\n", dim.Render("Tip: Open Raycast and type \"Mnemo\" to search, get context, or view recent sessions."))
-				}
-			}
+		if envMode := os.Getenv("MNEMO_INJECTION_MODE"); envMode != "" {
+			injectionMode = envMode
 		}
 	}
 
-	// Injection mode selection
-	fmt.Println()
-	fmt.Printf("  %s\n", dim.Render("Context injection automatically surfaces relevant past sessions"))
-	fmt.Printf("  %s\n", dim.Render("alongside your prompts in Claude Code and OpenCode."))
-	fmt.Println()
-	fmt.Println("  Choose injection mode:")
-	fmt.Printf("    %s  No auto-injection (use /remember manually)\n", dim.Render("[1] off"))
-	fmt.Printf("    %s  Inject only for code/debug prompts\n", dim.Render("[2] helper"))
-	fmt.Printf("    %s  Inject relevant context with every prompt\n", green.Render("[3] assistant (recommended)"))
-	fmt.Println()
-	fmt.Printf("  Select [1/2/3]: ")
-	modeAnswer, _ := reader.ReadString('\n')
-	modeAnswer = strings.TrimSpace(modeAnswer)
-	injectionMode := "assistant" // default
-	switch modeAnswer {
-	case "1":
-		injectionMode = "off"
-	case "2":
-		injectionMode = "helper"
-	}
 	// Write injection mode to config
 	mnemoDir := filepath.Join(home, ".mnemo")
 	configPath := filepath.Join(mnemoDir, "config.json")

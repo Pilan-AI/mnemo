@@ -298,9 +298,6 @@ func installRaycastScripts(home, mnemoPath string) string {
 		return ""
 	}
 
-	pathExport := fmt.Sprintf(`export PATH="%s:$HOME/bin:$HOME/go/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"`,
-		filepath.Dir(mnemoPath))
-
 	scripts := []struct {
 		name    string
 		content string
@@ -322,8 +319,6 @@ func installRaycastScripts(home, mnemoPath string) string {
 # Documentation:
 # @raycast.argument1 { "type": "text", "placeholder": "Enter search query" }
 
-%s
-
 QUERY="$1"
 
 if [ -z "$QUERY" ]; then
@@ -331,10 +326,10 @@ if [ -z "$QUERY" ]; then
     exit 1
 fi
 
-mnemo search "$QUERY" 2>&1
+"%s" search "$QUERY" 2>&1
 
 exit 0
-`, pathExport)},
+`, mnemoPath)},
 		{"mnemo-context.sh", fmt.Sprintf(`#!/bin/bash
 
 # Required parameters:
@@ -352,8 +347,6 @@ exit 0
 # Documentation:
 # @raycast.argument1 { "type": "text", "placeholder": "Project name" }
 
-%s
-
 PROJECT="$1"
 
 if [ -z "$PROJECT" ]; then
@@ -361,10 +354,10 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-mnemo context "$PROJECT" 2>&1
+"%s" context "$PROJECT" 2>&1
 
 exit 0
-`, pathExport)},
+`, mnemoPath)},
 		{"mnemo-recent.sh", fmt.Sprintf(`#!/bin/bash
 
 # Required parameters:
@@ -379,12 +372,10 @@ exit 0
 # @raycast.author 0xraghu
 # @raycast.authorURL https://github.com/Pilan-AI/mnemo
 
-%s
-
-mnemo recent -d 7 2>&1
+"%s" recent -d 7 2>&1
 
 exit 0
-`, pathExport)},
+`, mnemoPath)},
 	}
 
 	installed := 0
