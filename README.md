@@ -187,6 +187,85 @@ graph TD
 
 The database is a single file. Back it up, move it between machines, query it with any SQLite client.
 
+## Technical details
+
+### Search ranking
+
+mnemo doesn't just match keywords — it ranks results using a composite scoring algorithm:
+
+```
+FinalScore = (BM25 - densityBonus - userBonus) * temporalDecay
+```
+
+| Factor | How it works |
+|--------|-------------|
+| **BM25** | SQLite FTS5's built-in relevance ranking. Handles term frequency, document length normalization, and inverse document frequency automatically. |
+| **Temporal decay** | `e^(-0.03 * daysOld)` — exponential decay so last week's sessions score ~80%, last month's ~40%, 3 months ago ~10%. Recent decisions surface first. |
+| **Match density** | Sessions with multiple matching messages get a bonus (capped at 20 matches to prevent runaway scores from mega-sessions). |
+| **User-message preference** | Your prompts are weighted 2x over assistant responses. What you asked reveals more about intent than what the AI answered. |
+
+Results are grouped by session, not by message. When you search for "auth flow," you get the 5 most relevant sessions — not 50 scattered messages from the same conversation.
+
+### Context injection
+
+mnemo auto-injects relevant past context into your AI coding sessions via Claude Code's `UserPromptSubmit` hook. Here's what actually happens on every prompt:
+
+1. Claude Code passes your prompt as JSON on stdin to `mnemo inject`
+2. Keywords are extracted (stop words removed, first 200 chars, max 10 terms)
+3. FTS5 search runs against the local SQLite database (~0.8s, no network)
+4. Top 3 sessions are formatted as a plain text summary (~200-500 tokens)
+5. Claude Code injects this as additional context before processing
+
+The injection mode controls when this fires:
+
+| Mode | Behavior | Best for |
+|------|----------|----------|
+| `off` | No auto-injection. Use `/remember` manually | Minimal overhead |
+| `helper` | Inject only for code/debug prompts | Most users |
+| `assistant` | Inject on every prompt | Heavy context switching |
+
+**Token overhead**: ~0.1-0.3% increase per session. The savings come from not re-explaining context that the AI already discussed with you last week.
+
+### Database design
+
+Everything lives in a single SQLite file (`~/.mnemo/mnemo.db`) using WAL mode for concurrent reads:
+
+- **FTS5 virtual table** with BM25 ranking — no external search engine needed
+- **WAL mode** — multiple readers (MCP servers, CLI) never block each other
+- **Read-only mode for hooks** — inject opens the DB without write locks, so it can't be blocked by background indexing
+- **Single-writer constraint** (`MaxOpenConns=1`) — prevents "database is locked" errors during indexing
+- **Atomic transactions** — each tool's sessions index fully or roll back. No partial writes on interruption.
+
+The database is portable. Copy `~/.mnemo/mnemo.db` to another machine, and all your indexed sessions come with it. Query it with any SQLite client (`sqlite3`, DB Browser, Datasette).
+
+### Zero dependencies at runtime
+
+mnemo is a single static binary. No CGO, no system SQLite, no runtime dependencies.
+
+| Decision | Why |
+|----------|-----|
+| **Pure-Go SQLite** ([modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite)) | Cross-compiles to every platform without C toolchain. Same SQLite behavior everywhere. |
+| **No config files required** | Auto-detects tools by scanning known paths. Works on first run with `mnemo index`. |
+| **No cloud, no accounts** | Data never leaves your machine. No telemetry, no analytics, no network calls. |
+| **No background daemon** | Indexing runs on-demand or via optional cron/launchd. No process sitting in your tray. |
+
+### Indexer architecture
+
+Each AI tool stores conversations differently. mnemo has 12 dedicated indexers that parse native formats:
+
+```
+JSONL parsers   → Claude Code, Codex, Antigravity
+JSON parsers    → OpenCode, Gemini CLI, Amp, Kiro, Cline, Roo Code, Kilo Code
+SQLite readers  → Cursor, Crush
+```
+
+Every indexer:
+- Auto-detects the tool's data directory across macOS, Linux, and Windows
+- Handles format variations (OpenCode changed their schema twice, Gemini CLI has 3 different path layouts)
+- Deduplicates messages by content hash to prevent double-counting
+- Normalizes timestamps to UTC
+- Runs inside a transaction — either the full session indexes or nothing does
+
 ## Platform support
 
 - **macOS** (Apple Silicon + Intel)
