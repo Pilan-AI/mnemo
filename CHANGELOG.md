@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.3.0] - 2026-02-08
 
 ### Added
+- **Auto-context injection**: `mnemo inject` command for Claude Code `UserPromptSubmit` hook — searches past sessions on every prompt and injects relevant context automatically
+- **Injection modes**: `off` / `helper` / `assistant` — configurable via `mnemo configure` with read-merge-write config persistence
+- **Onboarding injection setup**: Interactive mode selection during first-run onboarding
 - **Transaction support**: All indexers now use atomic transactions — a session either fully indexes or rolls back, preventing partial writes on interruption
 - **Typed return structs**: `RecentSession`, `UsageStats`, `ToolUsageSummary`, `ModelUsageSummary` replace raw `map[string]interface{}` returns
 - **Scan error logging**: All `rows.Scan` failures across the db layer now emit `log.Printf` diagnostics instead of silently continuing
