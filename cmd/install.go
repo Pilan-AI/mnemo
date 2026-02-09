@@ -52,6 +52,7 @@ directly in Claude Desktop.`,
 		fmt.Println("  - Claude Code: Skill auto-activates on context keywords")
 		fmt.Println("  - Claude Desktop: MCP tools (mnemo_search, mnemo_context, mnemo_recent)")
 		fmt.Println("  - OpenCode: Context survives session compaction")
+		fmt.Println("  - Background indexer: Sessions re-indexed every 30 minutes")
 		fmt.Println()
 		fmt.Println("Note: Restart Claude Desktop to activate MCP server.")
 	},
@@ -160,7 +161,114 @@ func runInstallPlugins(home string) []string {
 		}
 	}
 
+	// Background indexer (periodic re-index every 30 min)
+	if r := installBackgroundIndexer(home, mnemoPath); r != "" {
+		results = append(results, r)
+	}
+
 	return results
+}
+
+// installBackgroundIndexer sets up a periodic background index.
+// On macOS: launchd agent. On Linux: systemd user timer. On Windows: skipped.
+func installBackgroundIndexer(home, mnemoPath string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return installLaunchdAgent(home, mnemoPath)
+	case "linux":
+		return installSystemdTimer(home, mnemoPath)
+	default:
+		return ""
+	}
+}
+
+func installLaunchdAgent(home, mnemoPath string) string {
+	label := "com.pilan.mnemo-index"
+	plistDir := filepath.Join(home, "Library", "LaunchAgents")
+	plistPath := filepath.Join(plistDir, label+".plist")
+
+	if err := os.MkdirAll(plistDir, 0755); err != nil {
+		return ""
+	}
+
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>%s</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+        <string>index</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>StandardOutPath</key>
+    <string>/dev/null</string>
+    <key>StandardErrorPath</key>
+    <string>/dev/null</string>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>`, label, mnemoPath)
+
+	if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
+		return ""
+	}
+
+	// Load the agent (unload first if exists, ignore errors)
+	_ = exec.Command("launchctl", "unload", plistPath).Run()
+	if err := exec.Command("launchctl", "load", plistPath).Run(); err != nil {
+		return "  ✓ Background indexer plist written (load manually: launchctl load " + plistPath + ")"
+	}
+
+	return "  ✓ Background indexer active (every 30 min)"
+}
+
+func installSystemdTimer(home, mnemoPath string) string {
+	unitDir := filepath.Join(home, ".config", "systemd", "user")
+	if err := os.MkdirAll(unitDir, 0755); err != nil {
+		return ""
+	}
+
+	service := fmt.Sprintf(`[Unit]
+Description=mnemo index - reindex AI coding sessions
+
+[Service]
+Type=oneshot
+ExecStart=%s index
+`, mnemoPath)
+
+	timer := `[Unit]
+Description=mnemo periodic reindex
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+
+[Install]
+WantedBy=timers.target
+`
+
+	servicePath := filepath.Join(unitDir, "mnemo-index.service")
+	timerPath := filepath.Join(unitDir, "mnemo-index.timer")
+
+	if os.WriteFile(servicePath, []byte(service), 0644) != nil {
+		return ""
+	}
+	if os.WriteFile(timerPath, []byte(timer), 0644) != nil {
+		return ""
+	}
+
+	// Enable and start the timer
+	_ = exec.Command("systemctl", "--user", "daemon-reload").Run()
+	_ = exec.Command("systemctl", "--user", "enable", "mnemo-index.timer").Run()
+	if err := exec.Command("systemctl", "--user", "start", "mnemo-index.timer").Run(); err != nil {
+		return "  ✓ Systemd timer written (enable: systemctl --user enable --now mnemo-index.timer)"
+	}
+
+	return "  ✓ Background indexer active (every 30 min)"
 }
 
 func init() {
