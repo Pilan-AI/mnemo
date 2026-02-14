@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.2] - 2026-02-14
+
+### Fixed
+- **Context injection missing for most prompts**: `extractKeywords` joined search terms with spaces (FTS5 implicit AND), requiring ALL keywords to appear in a single message. Most natural language prompts returned zero results. Now uses `OR` operator so any matching keyword surfaces relevant sessions.
+- **Too many keywords diluting search**: Reduced max keywords from 10 to 5 for more focused FTS5 queries with better relevance.
+
+### Changed
+- **Recommended injection mode is now `assistant`**: The `helper` mode's keyword filter (`isCodeRelated`) is too restrictive — filters out legitimate developer prompts that don't contain hardcoded code keywords. Users should run `mnemo configure assistant` for reliable auto-injection.
+
+---
+
 ## [1.3.1] - 2026-02-09
 
 ### Fixed

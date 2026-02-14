@@ -170,11 +170,13 @@ func extractKeywords(prompt string) string {
 		keywords = append(keywords, w)
 	}
 
-	if len(keywords) > 10 {
-		keywords = keywords[:10]
+	if len(keywords) > 5 {
+		keywords = keywords[:5]
 	}
 
-	return strings.Join(keywords, " ")
+	// Use OR so FTS5 matches ANY keyword, not ALL (implicit AND).
+	// This dramatically improves recall for natural language prompts.
+	return strings.Join(keywords, " OR ")
 }
 
 // formatInjectionContext builds a compact context string from search results.
