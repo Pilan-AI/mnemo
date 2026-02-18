@@ -1,18 +1,22 @@
-// index_opencode.go indexes OpenCode sessions stored as JSON files.
-// Sessions live under ~/.local/share/opencode/sessions/<session-id>/.
+// index_opencode.go indexes OpenCode sessions from either SQLite (1.2.0+) or JSON (pre-1.2.0).
+// SQLite: ~/.local/share/opencode/opencode.db
+// JSON: ~/.local/share/opencode/storage/message/<session-id>/msg_*.json
 package cmd
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
-// indexOpencode walks the OpenCode sessions directory and indexes each session.
+// indexOpencode walks the OpenCode sessions and indexes each session.
+// Supports both SQLite (1.2.0+) and JSON (pre-1.2.0) formats.
 // Returns total (sessions, messages) indexed.
 func indexOpencode(basePath string) (int, int) {
 	home, err := os.UserHomeDir()
@@ -20,6 +24,13 @@ func indexOpencode(basePath string) (int, int) {
 		return 0, 0
 	}
 
+	// Try SQLite first (OpenCode 1.2.0+)
+	dbPath := filepath.Join(home, ".local/share/opencode/opencode.db")
+	if pathExists(dbPath) {
+		return indexOpenCodeSQLite(dbPath)
+	}
+
+	// Fall back to JSON format (OpenCode <1.2.0)
 	storagePath := filepath.Join(home, ".local/share/opencode/storage")
 	messagePath := filepath.Join(storagePath, "message")
 
@@ -328,4 +339,284 @@ func getMessageContent(partBasePath, messageID string) string {
 	}
 
 	return strings.Join(contentParts, "\n")
+}
+
+// indexOpenCodeSQLite indexes sessions from OpenCode 1.2.0+ SQLite database.
+// Returns total (sessions, messages) indexed.
+func indexOpenCodeSQLite(dbPath string) (int, int) {
+	sqliteDB, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	if err != nil {
+		return 0, 0
+	}
+	defer func() { _ = sqliteDB.Close() }()
+
+	// Set busy timeout for concurrent access
+	sqliteDB.SetMaxOpenConns(1)
+	sqliteDB.SetMaxIdleConns(1)
+
+	// Get all sessions
+	rows, err := sqliteDB.Query(`
+		SELECT id, project_id, directory, title, version, time_created, time_updated
+		FROM session
+		ORDER BY time_created DESC
+	`)
+	if err != nil {
+		return 0, 0
+	}
+	defer func() { _ = rows.Close() }()
+
+	totalSessions := 0
+	totalMessages := 0
+
+	for rows.Next() {
+		var sessionID, projectID, directory, title, version string
+		var timeCreated, timeUpdated int64
+		if err := rows.Scan(&sessionID, &projectID, &directory, &title, &version, &timeCreated, &timeUpdated); err != nil {
+			continue
+		}
+
+		// Skip if session hasn't changed
+		modTime := time.UnixMilli(timeUpdated)
+		if isSessionUnchanged(sessionID, modTime) {
+			continue
+		}
+
+		s, m := indexOpenCodeSQLiteSession(sqliteDB, sessionID, directory, title, version)
+		totalSessions += s
+		totalMessages += m
+	}
+
+	return totalSessions, totalMessages
+}
+
+// indexOpenCodeSQLiteSession indexes a single session from SQLite.
+func indexOpenCodeSQLiteSession(sqliteDB *sql.DB, sessionID, directory, title, version string) (int, int) {
+	// Get all messages for this session
+	msgRows, err := sqliteDB.Query(`
+		SELECT id, time_created, data
+		FROM message
+		WHERE session_id = ?
+		ORDER BY time_created ASC
+	`, sessionID)
+	if err != nil {
+		return 0, 0
+	}
+	defer func() { _ = msgRows.Close() }()
+
+	projectName := ""
+	if directory != "" {
+		projectName = filepath.Base(directory)
+	}
+
+	var firstUserMsg string
+	var sessionModel, sessionProvider string
+	var sessionStartTime, sessionEndTime time.Time
+	var totalInputTokens, totalOutputTokens, totalCacheRead, totalCacheWrite, totalReasoningTokens int
+	var totalCostUSD float64
+	msgCount := 0
+
+	tx, err := db.BeginTx()
+	if err != nil {
+		indexErrors++
+		return 0, 0
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := db.TxDeleteSessionMessages(tx, sessionID); err != nil {
+		indexErrors++
+		return 0, 0
+	}
+
+	for msgRows.Next() {
+		var msgID string
+		var timeCreated int64
+		var dataJSON string
+		if err := msgRows.Scan(&msgID, &timeCreated, &dataJSON); err != nil {
+			continue
+		}
+
+		var msgData map[string]interface{}
+		if err := json.Unmarshal([]byte(dataJSON), &msgData); err != nil {
+			continue
+		}
+
+		role, _ := msgData["role"].(string)
+		if role == "" || (role != "user" && role != "assistant") {
+			continue
+		}
+
+		// Extract content from message
+		content := extractMessageContent(msgData)
+		if content == "" {
+			continue
+		}
+
+		// Extract model info
+		var model, provider string
+		if modelID, ok := msgData["modelID"].(string); ok {
+			model = modelID
+		}
+		if providerID, ok := msgData["providerID"].(string); ok {
+			provider = providerID
+		}
+
+		if sessionModel == "" && model != "" {
+			sessionModel = model
+		}
+		if sessionProvider == "" && provider != "" {
+			sessionProvider = provider
+		}
+
+		// Extract timestamps
+		msgTime := time.UnixMilli(timeCreated)
+		if sessionStartTime.IsZero() || msgTime.Before(sessionStartTime) {
+			sessionStartTime = msgTime
+		}
+		if msgTime.After(sessionEndTime) {
+			sessionEndTime = msgTime
+		}
+
+		// Extract tokens
+		var inputTokens, outputTokens, cacheRead, cacheWrite, reasoning int
+		if tokensMap, ok := msgData["tokens"].(map[string]interface{}); ok {
+			if v, ok := tokensMap["input"].(float64); ok {
+				inputTokens = int(v)
+			}
+			if v, ok := tokensMap["output"].(float64); ok {
+				outputTokens = int(v)
+			}
+			if v, ok := tokensMap["reasoning"].(float64); ok {
+				reasoning = int(v)
+			}
+			if cacheMap, ok := tokensMap["cache"].(map[string]interface{}); ok {
+				if v, ok := cacheMap["read"].(float64); ok {
+					cacheRead = int(v)
+				}
+				if v, ok := cacheMap["write"].(float64); ok {
+					cacheWrite = int(v)
+				}
+			}
+		}
+
+		var costUSD float64
+		if v, ok := msgData["cost"].(float64); ok {
+			costUSD = v
+		}
+
+		totalInputTokens += inputTokens
+		totalOutputTokens += outputTokens
+		totalCacheRead += cacheRead
+		totalCacheWrite += cacheWrite
+		totalReasoningTokens += reasoning
+		totalCostUSD += costUSD
+
+		// Track first user message for session title
+		if role == "user" && firstUserMsg == "" && !isSystemDirective(content) {
+			firstUserMsg = truncate(sanitizeContent(content), 200)
+		}
+
+		// Insert message
+		msgDate := msgTime.Format("2006-01-02")
+		if err := db.TxInsertMessage(tx, db.Message{
+			SessionID:        sessionID,
+			Project:          projectName,
+			Role:             role,
+			Content:          content,
+			Timestamp:        msgTime,
+			Tool:             "opencode",
+			Model:            model,
+			Provider:         provider,
+			InputTokens:      inputTokens,
+			OutputTokens:     outputTokens,
+			CacheReadTokens:  cacheRead,
+			CacheWriteTokens: cacheWrite,
+			ReasoningTokens:  reasoning,
+			CostUSD:          costUSD,
+			Date:             msgDate,
+		}); err != nil {
+			indexErrors++
+			continue
+		}
+
+		msgCount++
+	}
+
+	// Create session record
+	if msgCount > 0 {
+		if projectName == "" {
+			projectName = "opencode"
+		}
+
+		sessionQuery := firstUserMsg
+		if sessionQuery == "" {
+			sessionQuery = title
+		}
+
+		sessionDate := ""
+		if !sessionStartTime.IsZero() {
+			sessionDate = sessionStartTime.Format("2006-01-02")
+		}
+
+		if err := db.TxInsertSession(tx, db.Session{
+			ID:                   sessionID,
+			Project:              projectName,
+			FirstQuery:           sessionQuery,
+			MessageCount:         msgCount,
+			Tool:                 "opencode",
+			FilePath:             directory,
+			Model:                sessionModel,
+			Provider:             sessionProvider,
+			TotalInputTokens:     totalInputTokens,
+			TotalOutputTokens:    totalOutputTokens,
+			TotalCacheRead:       totalCacheRead,
+			TotalCacheWrite:      totalCacheWrite,
+			TotalReasoningTokens: totalReasoningTokens,
+			TotalCostUSD:         totalCostUSD,
+			CLIVersion:           version,
+			WorkingDirectory:     directory,
+			StartTime:            sessionStartTime,
+			EndTime:              sessionEndTime,
+			Date:                 sessionDate,
+		}); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+
+		if err := tx.Commit(); err != nil {
+			indexErrors++
+			return 0, msgCount
+		}
+		return 1, msgCount
+	}
+
+	return 0, 0
+}
+
+// extractMessageContent extracts text content from message data
+func extractMessageContent(msgData map[string]interface{}) string {
+	var contentParts []string
+
+	// Check for direct content field
+	if content, ok := msgData["content"].(string); ok && content != "" {
+		return content
+	}
+
+	// Check for parts array (newer format)
+	if parts, ok := msgData["parts"].([]interface{}); ok {
+		for _, part := range parts {
+			if partMap, ok := part.(map[string]interface{}); ok {
+				if partType, ok := partMap["type"].(string); ok && partType == "text" {
+					if text, ok := partMap["text"].(string); ok {
+						contentParts = append(contentParts, text)
+					}
+				}
+			}
+		}
+	}
+
+	if len(contentParts) > 0 {
+		return strings.Join(contentParts, "\n")
+	}
+
+	return ""
 }
