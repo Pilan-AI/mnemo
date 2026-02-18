@@ -348,7 +348,7 @@ func indexOpenCodeSQLite(dbPath string) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	defer sqliteDB.Close()
+	defer func() { _ = sqliteDB.Close() }()
 
 	// Set busy timeout for concurrent access
 	sqliteDB.SetMaxOpenConns(1)
@@ -363,7 +363,7 @@ func indexOpenCodeSQLite(dbPath string) (int, int) {
 	if err != nil {
 		return 0, 0
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	totalSessions := 0
 	totalMessages := 0
@@ -401,7 +401,7 @@ func indexOpenCodeSQLiteSession(sqliteDB *sql.DB, sessionID, directory, title, v
 	if err != nil {
 		return 0, 0
 	}
-	defer msgRows.Close()
+	defer func() { _ = msgRows.Close() }()
 
 	projectName := ""
 	if directory != "" {

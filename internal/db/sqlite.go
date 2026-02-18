@@ -298,7 +298,7 @@ func OpenReadOnlySQLite(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	if err := conn.Ping(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to open %s: %w", filepath.Base(path), err)
 	}
 	return conn, nil
