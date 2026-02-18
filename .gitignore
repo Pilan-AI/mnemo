@@ -41,6 +41,8 @@ assets/video/*.mkv
 # Local config
 .env
 .env.local
+.omc/
+.nano-banana-config.json
 
 # Local docs
 docs/audit
