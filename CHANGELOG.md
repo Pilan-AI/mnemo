@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.3] - 2026-02-18
+
+### Fixed
+- **`mnemo add` documents not appearing in search**: Documents indexed via `mnemo add` now create proper session records, making them visible to `mnemo search`. Previously only messages were inserted without corresponding session entries, causing `SearchGrouped()` to skip results.
+- **OpenCode 1.2.0+ SQLite format support**: Added dual-format support for OpenCode sessions. Auto-detects and indexes both SQLite (1.2.0+) and JSON (pre-1.2.0) formats. Users can upgrade OpenCode without breaking mnemo indexing.
+
+### Added
+- **OpenCode SQLite reader**: Reads sessions, messages, and parts from `~/.local/share/opencode/opencode.db` with read-only concurrent access
+- **Automatic format detection**: Checks for SQLite DB first, falls back to JSON for older installations
+- **go-sqlite3 dependency**: Added `github.com/mattn/go-sqlite3` v1.14.34 for SQLite database support
+
+### Changed
+- **`mnemo add` uses transactions**: Document indexing now wraps all inserts in atomic transactions for better data integrity
+- **Session-per-document**: Each indexed file gets its own session record (similar to tool indexers) for proper grouping
+
+---
+
 ## [1.3.2] - 2026-02-14
 
 ### Fixed
