@@ -76,6 +76,14 @@ Examples:
 		fileCount := 0
 		totalBytes := int64(0)
 
+		// Start transaction for atomic inserts
+		tx, err := db.BeginTx()
+		if err != nil {
+			fmt.Printf("Error starting transaction: %v\n", err)
+			return
+		}
+		defer func() { _ = tx.Rollback() }()
+
 		if err := filepath.Walk(sourcePath, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
@@ -111,8 +119,20 @@ Examples:
 			relPath, _ := filepath.Rel(sourcePath, path)
 			sessionID := fmt.Sprintf("doc:%s:%s", addName, relPath)
 
+			// Create session record first (required for search to work)
+			firstQuery := relPath // Use filename as first query
+			if len(firstQuery) > 200 {
+				firstQuery = firstQuery[:200] // Truncate if too long
+			}
+
+			err = db.TxInsertSessionSimple(tx, sessionID, addName, firstQuery, path, "docs", 1)
+			if err != nil {
+				fmt.Printf("Warning: failed to create session for %s: %v\n", relPath, err)
+				return nil
+			}
+
 			// Insert as a document
-			err = db.InsertMessage(db.Message{
+			err = db.TxInsertMessage(tx, db.Message{
 				SessionID: sessionID,
 				Project:   addName,
 				Role:      "document",
@@ -130,6 +150,12 @@ Examples:
 			return nil
 		}); err != nil {
 			fmt.Printf("Error walking directory: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Commit transaction
+		if err := tx.Commit(); err != nil {
+			fmt.Printf("Error committing transaction: %v\n", err)
 			os.Exit(1)
 		}
 
