@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-- **HTTP proxy code**: Removed unused `/proxy` package and related code. The proxy was experimental and never wired into the CLI. mnemo's architecture uses MCP server + hooks for context injection, not HTTP interception. Fixes security issue #5.
-
 ### Planned
 - Hybrid search with vector similarity
 - Markdown export for Git-friendly backups
 - Thinking block extraction for reasoning analysis
+
+---
+
+## [1.3.4] - 2026-04-09
+
+### Security
+- **Fixed CVE-2026-32285 (High severity)**: Updated transitive dependencies (`github.com/mark3labs/mcp-go`, `github.com/mailru/easyjson`) to eliminate vulnerable `github.com/buger/jsonparser` v1.1.1 (DoS via negative slice index panic). Resolves Dependabot alert #1.
+
+### Removed
+- **HTTP proxy code**: Removed unused `/proxy` package and related code. The proxy was experimental and never wired into the CLI. mnemo's architecture uses MCP server + hooks for context injection, not HTTP interception. Fixes security issue #5.
+
+### Changed
+- **CI lint timeout**: Updated golangci-lint workflow to use `--timeout=5m` inline arg to prevent timeout failures on GitHub Actions.
 
 ---
 
