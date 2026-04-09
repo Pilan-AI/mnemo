@@ -116,8 +116,7 @@ type UsageEntry struct {
 
 // GetUsageEntries fetches token usage records for block identification.
 // Falls back to the sessions table if the token_usage table is empty,
-// which happens when data was indexed from session history rather than
-// live-tracked via the proxy.
+// which happens when data was indexed from session history.
 func GetUsageEntries(days int) ([]UsageEntry, error) {
 	query := `
 		SELECT
