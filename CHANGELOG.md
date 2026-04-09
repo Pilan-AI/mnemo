@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **HTTP proxy code**: Removed unused `/proxy` package and related code. The proxy was experimental and never wired into the CLI. mnemo's architecture uses MCP server + hooks for context injection, not HTTP interception. Fixes security issue #5.
+
 ### Planned
 - Hybrid search with vector similarity
 - Markdown export for Git-friendly backups

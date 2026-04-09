@@ -40,5 +40,4 @@ mnemo stores AI coding session data locally in `~/.mnemo/mnemo.db`. Security con
 
 - Database uses SQLite WAL mode with local file permissions
 - FTS5 queries are sanitized before execution
-- The proxy server (if used) binds to localhost only
 - No API keys or secrets are stored in the database
