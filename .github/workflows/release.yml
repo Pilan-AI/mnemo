@@ -1,0 +1,42 @@
+name: Bump Homebrew Formula
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.3.4)'
+        required: true
+
+jobs:
+  homebrew:
+    name: Update homebrew-tap
+    runs-on: ubuntu-latest
+    env:
+      # Funnel all untrusted refs through env so they never interpolate into shell/action args directly.
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Validate tag name
+        run: |
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.+-]+)?$'; then
+            echo "Refusing to bump — tag '$RELEASE_TAG' is not a valid semver-style tag." >&2
+            exit 1
+          fi
+
+      - name: Bump formula in Pilan-AI/homebrew-tap
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: mnemo
+          formula-path: Formula/mnemo.rb
+          homebrew-tap: Pilan-AI/homebrew-tap
+          base-branch: main
+          tag-name: ${{ env.RELEASE_TAG }}
+          download-url: https://github.com/Pilan-AI/mnemo/archive/refs/tags/${{ env.RELEASE_TAG }}.tar.gz
+          commit-message: |
+            {{formulaName}} {{version}}
+
+            Auto-bump from Pilan-AI/mnemo release {{version}}
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_PAT }}
