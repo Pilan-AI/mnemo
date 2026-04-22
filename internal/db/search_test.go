@@ -44,9 +44,9 @@ func TestSanitizeFTS5Query(t *testing.T) {
 
 func TestParseFlexibleTime(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantUTC bool
+		name     string
+		input    string
+		wantUTC  bool
 		wantZero bool
 	}{
 		{name: "empty string", input: "", wantZero: true},

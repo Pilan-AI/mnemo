@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/Pilan-AI/mnemo/internal/db"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // indexOpencode walks the OpenCode sessions and indexes each session.
