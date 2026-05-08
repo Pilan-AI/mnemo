@@ -450,19 +450,26 @@ func indexOpenCodeSQLiteSession(sqliteDB *sql.DB, sessionID, directory, title, v
 			continue
 		}
 
-		// Extract content from message
-		content := extractMessageContent(msgData)
+		content := getOpenCodeMessageContent(sqliteDB, msgID)
 		if content == "" {
 			continue
 		}
 
 		// Extract model info
 		var model, provider string
-		if modelID, ok := msgData["modelID"].(string); ok {
-			model = modelID
+		if modelMap, ok := msgData["model"].(map[string]interface{}); ok {
+			model, _ = modelMap["modelID"].(string)
+			provider, _ = modelMap["providerID"].(string)
 		}
-		if providerID, ok := msgData["providerID"].(string); ok {
-			provider = providerID
+		if model == "" {
+			if modelID, ok := msgData["modelID"].(string); ok {
+				model = modelID
+			}
+		}
+		if provider == "" {
+			if providerID, ok := msgData["providerID"].(string); ok {
+				provider = providerID
+			}
 		}
 
 		if sessionModel == "" && model != "" {
@@ -597,31 +604,38 @@ func indexOpenCodeSQLiteSession(sqliteDB *sql.DB, sessionID, directory, title, v
 	return 0, 0
 }
 
-// extractMessageContent extracts text content from message data
-func extractMessageContent(msgData map[string]interface{}) string {
-	var contentParts []string
-
-	// Check for direct content field
-	if content, ok := msgData["content"].(string); ok && content != "" {
-		return content
+// getOpenCodeMessageContent queries the part table for a message's text content.
+// OpenCode 1.2.0+ stores message content in a separate part table rather than
+// inline in the message data.
+func getOpenCodeMessageContent(sqliteDB *sql.DB, messageID string) string {
+	partRows, err := sqliteDB.Query(`
+		SELECT data
+		FROM part
+		WHERE message_id = ?
+		ORDER BY time_created ASC
+	`, messageID)
+	if err != nil {
+		return ""
 	}
+	defer func() { _ = partRows.Close() }()
 
-	// Check for parts array (newer format)
-	if parts, ok := msgData["parts"].([]interface{}); ok {
-		for _, part := range parts {
-			if partMap, ok := part.(map[string]interface{}); ok {
-				if partType, ok := partMap["type"].(string); ok && partType == "text" {
-					if text, ok := partMap["text"].(string); ok {
-						contentParts = append(contentParts, text)
-					}
-				}
+	var contentParts []string
+	for partRows.Next() {
+		var partDataJSON string
+		if err := partRows.Scan(&partDataJSON); err != nil {
+			continue
+		}
+		var partData map[string]interface{}
+		if err := json.Unmarshal([]byte(partDataJSON), &partData); err != nil {
+			continue
+		}
+		partType, _ := partData["type"].(string)
+		if partType == "text" {
+			if text, ok := partData["text"].(string); ok && text != "" {
+				contentParts = append(contentParts, text)
 			}
 		}
 	}
 
-	if len(contentParts) > 0 {
-		return strings.Join(contentParts, "\n")
-	}
-
-	return ""
+	return strings.Join(contentParts, "\n")
 }
