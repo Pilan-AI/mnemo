@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
@@ -344,15 +343,11 @@ func getMessageContent(partBasePath, messageID string) string {
 // indexOpenCodeSQLite indexes sessions from OpenCode 1.2.0+ SQLite database.
 // Returns total (sessions, messages) indexed.
 func indexOpenCodeSQLite(dbPath string) (int, int) {
-	sqliteDB, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	sqliteDB, err := db.OpenReadOnlySQLite(dbPath)
 	if err != nil {
 		return 0, 0
 	}
 	defer func() { _ = sqliteDB.Close() }()
-
-	// Set busy timeout for concurrent access
-	sqliteDB.SetMaxOpenConns(1)
-	sqliteDB.SetMaxIdleConns(1)
 
 	// Get all sessions
 	rows, err := sqliteDB.Query(`
