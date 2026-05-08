@@ -341,6 +341,9 @@ func getMessageContent(partBasePath, messageID string) string {
 }
 
 // indexOpenCodeSQLite indexes sessions from OpenCode 1.2.0+ SQLite database.
+// Uses a collect-then-process pattern: reads all session metadata into memory,
+// closes the outer cursor, then indexes each session individually. This avoids
+// holding a rows cursor open while making nested queries on the same connection.
 // Returns total (sessions, messages) indexed.
 func indexOpenCodeSQLite(dbPath string) (int, int) {
 	sqliteDB, err := db.OpenReadOnlySQLite(dbPath)
@@ -349,36 +352,43 @@ func indexOpenCodeSQLite(dbPath string) (int, int) {
 	}
 	defer func() { _ = sqliteDB.Close() }()
 
-	// Get all sessions
+	type openCodeSession struct {
+		id        string
+		directory string
+		title     string
+		version   string
+		updated   int64
+	}
+
 	rows, err := sqliteDB.Query(`
-		SELECT id, project_id, directory, title, version, time_created, time_updated
+		SELECT id, directory, title, version, time_updated
 		FROM session
 		ORDER BY time_created DESC
 	`)
 	if err != nil {
 		return 0, 0
 	}
-	defer func() { _ = rows.Close() }()
+
+	var sessions []openCodeSession
+	for rows.Next() {
+		var s openCodeSession
+		if err := rows.Scan(&s.id, &s.directory, &s.title, &s.version, &s.updated); err != nil {
+			continue
+		}
+		if isSessionUnchanged(s.id, time.UnixMilli(s.updated)) {
+			continue
+		}
+		sessions = append(sessions, s)
+	}
+	rows.Close()
 
 	totalSessions := 0
 	totalMessages := 0
 
-	for rows.Next() {
-		var sessionID, projectID, directory, title, version string
-		var timeCreated, timeUpdated int64
-		if err := rows.Scan(&sessionID, &projectID, &directory, &title, &version, &timeCreated, &timeUpdated); err != nil {
-			continue
-		}
-
-		// Skip if session hasn't changed
-		modTime := time.UnixMilli(timeUpdated)
-		if isSessionUnchanged(sessionID, modTime) {
-			continue
-		}
-
-		s, m := indexOpenCodeSQLiteSession(sqliteDB, sessionID, directory, title, version)
-		totalSessions += s
-		totalMessages += m
+	for _, s := range sessions {
+		numS, numM := indexOpenCodeSQLiteSession(sqliteDB, s.id, s.directory, s.title, s.version)
+		totalSessions += numS
+		totalMessages += numM
 	}
 
 	return totalSessions, totalMessages
