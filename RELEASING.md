@@ -10,12 +10,14 @@
    git push origin v1.x.y
    ```
 
-3. The [`Bump Homebrew Formula`](.github/workflows/release.yml) workflow fires on
-   the tag push and opens a PR against `Pilan-AI/homebrew-tap` bumping
-   `Formula/mnemo.rb` to the new version + sha256. Merge that PR.
-4. Optionally create a GitHub Release from the tag (`gh release create v1.x.y --generate-notes`).
+3. The [`Release`](.github/workflows/release.yml) workflow fires on the tag push.
+   It uses GoReleaser to create the GitHub Release, upload cross-platform binary
+   archives + checksums, and bump `Pilan-AI/homebrew-tap`.
+4. The workflow verifies that the GitHub Release has all expected assets and
+   that the Homebrew formula points at the same tag.
 
-That's it — `brew upgrade mnemo` picks up the new version as soon as the tap PR is merged.
+That's it — `brew upgrade mnemo` picks up the new version as soon as the release
+workflow completes.
 
 ## Required secrets
 
