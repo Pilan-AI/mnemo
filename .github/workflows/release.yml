@@ -45,7 +45,8 @@ jobs:
           version: 'v2.9.0'
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_PAT || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_PAT: ${{ secrets.HOMEBREW_TAP_PAT }}
 
   verify:
     name: Verify release distribution
