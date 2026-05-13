@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/Pilan-AI/mnemo/internal/db"
 )
 
@@ -342,48 +341,54 @@ func getMessageContent(partBasePath, messageID string) string {
 }
 
 // indexOpenCodeSQLite indexes sessions from OpenCode 1.2.0+ SQLite database.
+// Uses a collect-then-process pattern: reads all session metadata into memory,
+// closes the outer cursor, then indexes each session individually. This avoids
+// holding a rows cursor open while making nested queries on the same connection.
 // Returns total (sessions, messages) indexed.
 func indexOpenCodeSQLite(dbPath string) (int, int) {
-	sqliteDB, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	sqliteDB, err := db.OpenReadOnlySQLite(dbPath)
 	if err != nil {
 		return 0, 0
 	}
 	defer func() { _ = sqliteDB.Close() }()
 
-	// Set busy timeout for concurrent access
-	sqliteDB.SetMaxOpenConns(1)
-	sqliteDB.SetMaxIdleConns(1)
+	type openCodeSession struct {
+		id        string
+		directory string
+		title     string
+		version   string
+		updated   int64
+	}
 
-	// Get all sessions
 	rows, err := sqliteDB.Query(`
-		SELECT id, project_id, directory, title, version, time_created, time_updated
+		SELECT id, directory, title, version, time_updated
 		FROM session
 		ORDER BY time_created DESC
 	`)
 	if err != nil {
 		return 0, 0
 	}
-	defer func() { _ = rows.Close() }()
+
+	var sessions []openCodeSession
+	for rows.Next() {
+		var s openCodeSession
+		if err := rows.Scan(&s.id, &s.directory, &s.title, &s.version, &s.updated); err != nil {
+			continue
+		}
+		if isSessionUnchanged(s.id, time.UnixMilli(s.updated)) {
+			continue
+		}
+		sessions = append(sessions, s)
+	}
+	rows.Close()
 
 	totalSessions := 0
 	totalMessages := 0
 
-	for rows.Next() {
-		var sessionID, projectID, directory, title, version string
-		var timeCreated, timeUpdated int64
-		if err := rows.Scan(&sessionID, &projectID, &directory, &title, &version, &timeCreated, &timeUpdated); err != nil {
-			continue
-		}
-
-		// Skip if session hasn't changed
-		modTime := time.UnixMilli(timeUpdated)
-		if isSessionUnchanged(sessionID, modTime) {
-			continue
-		}
-
-		s, m := indexOpenCodeSQLiteSession(sqliteDB, sessionID, directory, title, version)
-		totalSessions += s
-		totalMessages += m
+	for _, s := range sessions {
+		numS, numM := indexOpenCodeSQLiteSession(sqliteDB, s.id, s.directory, s.title, s.version)
+		totalSessions += numS
+		totalMessages += numM
 	}
 
 	return totalSessions, totalMessages
@@ -445,19 +450,26 @@ func indexOpenCodeSQLiteSession(sqliteDB *sql.DB, sessionID, directory, title, v
 			continue
 		}
 
-		// Extract content from message
-		content := extractMessageContent(msgData)
+		content := getOpenCodeMessageContent(sqliteDB, msgID)
 		if content == "" {
 			continue
 		}
 
 		// Extract model info
 		var model, provider string
-		if modelID, ok := msgData["modelID"].(string); ok {
-			model = modelID
+		if modelMap, ok := msgData["model"].(map[string]interface{}); ok {
+			model, _ = modelMap["modelID"].(string)
+			provider, _ = modelMap["providerID"].(string)
 		}
-		if providerID, ok := msgData["providerID"].(string); ok {
-			provider = providerID
+		if model == "" {
+			if modelID, ok := msgData["modelID"].(string); ok {
+				model = modelID
+			}
+		}
+		if provider == "" {
+			if providerID, ok := msgData["providerID"].(string); ok {
+				provider = providerID
+			}
 		}
 
 		if sessionModel == "" && model != "" {
@@ -592,31 +604,38 @@ func indexOpenCodeSQLiteSession(sqliteDB *sql.DB, sessionID, directory, title, v
 	return 0, 0
 }
 
-// extractMessageContent extracts text content from message data
-func extractMessageContent(msgData map[string]interface{}) string {
-	var contentParts []string
-
-	// Check for direct content field
-	if content, ok := msgData["content"].(string); ok && content != "" {
-		return content
+// getOpenCodeMessageContent queries the part table for a message's text content.
+// OpenCode 1.2.0+ stores message content in a separate part table rather than
+// inline in the message data.
+func getOpenCodeMessageContent(sqliteDB *sql.DB, messageID string) string {
+	partRows, err := sqliteDB.Query(`
+		SELECT data
+		FROM part
+		WHERE message_id = ?
+		ORDER BY time_created ASC
+	`, messageID)
+	if err != nil {
+		return ""
 	}
+	defer func() { _ = partRows.Close() }()
 
-	// Check for parts array (newer format)
-	if parts, ok := msgData["parts"].([]interface{}); ok {
-		for _, part := range parts {
-			if partMap, ok := part.(map[string]interface{}); ok {
-				if partType, ok := partMap["type"].(string); ok && partType == "text" {
-					if text, ok := partMap["text"].(string); ok {
-						contentParts = append(contentParts, text)
-					}
-				}
+	var contentParts []string
+	for partRows.Next() {
+		var partDataJSON string
+		if err := partRows.Scan(&partDataJSON); err != nil {
+			continue
+		}
+		var partData map[string]interface{}
+		if err := json.Unmarshal([]byte(partDataJSON), &partData); err != nil {
+			continue
+		}
+		partType, _ := partData["type"].(string)
+		if partType == "text" {
+			if text, ok := partData["text"].(string); ok && text != "" {
+				contentParts = append(contentParts, text)
 			}
 		}
 	}
 
-	if len(contentParts) > 0 {
-		return strings.Join(contentParts, "\n")
-	}
-
-	return ""
+	return strings.Join(contentParts, "\n")
 }
