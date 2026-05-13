@@ -100,16 +100,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          formula_url="https://raw.githubusercontent.com/Pilan-AI/homebrew-tap/main/Formula/mnemo.rb"
-          formula="$(curl -fsSL "$formula_url")"
+          version="${RELEASE_TAG#v}"
+          formula="$(gh api 'repos/Pilan-AI/homebrew-tap/contents/Formula/mnemo.rb?ref=main' --jq '.content' | base64 --decode)"
 
-          if ! grep -Fq "https://github.com/Pilan-AI/mnemo/archive/refs/tags/${RELEASE_TAG}.tar.gz" <<<"$formula"; then
-            echo "Homebrew formula does not point at ${RELEASE_TAG}" >&2
+          if ! grep -Fq "version \"${version}\"" <<<"$formula"; then
+            echo "Homebrew formula version does not match ${RELEASE_TAG}" >&2
             echo "$formula" >&2
             exit 1
           fi
 
-          if ! grep -Fq 'system "#{bin}/mnemo", "version"' <<<"$formula"; then
+          if ! grep -Fq "https://github.com/Pilan-AI/mnemo/releases/download/${RELEASE_TAG}/" <<<"$formula"; then
+            echo "Homebrew formula does not use ${RELEASE_TAG} release assets" >&2
+            echo "$formula" >&2
+            exit 1
+          fi
+
+          if ! grep -Fq 'system "#{bin}/mnemo", "version"' <<<"$formula" &&
+             ! grep -Fq 'assert_match "mnemo", shell_output("#{bin}/mnemo version")' <<<"$formula"; then
             echo "Homebrew formula is missing the mnemo version smoke test" >&2
             echo "$formula" >&2
             exit 1
