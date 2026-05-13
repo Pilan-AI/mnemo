@@ -45,6 +45,7 @@ brews:
       owner: Pilan-AI
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_PAT }}"
+    directory: Formula
     homepage: "https://github.com/Pilan-AI/mnemo"
     description: "Memory for AI-assisted development. Search your AI coding sessions."
     license: "MIT"
