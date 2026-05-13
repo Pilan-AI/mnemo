@@ -82,7 +82,7 @@ If you use Claude Code or OpenCode, the plugins give you a much deeper integrati
 mnemo install claude-code
 ```
 
-This installs the [mnemo-memory plugin](https://github.com/Pilan-AI/pilan-plugins) which gives you:
+This installs the [mnemo-memory plugin](#claude-code-plugin) which gives you:
 
 - **Auto-context** — past session context loads automatically when you start working
 - `/mnemo-memory:remember <query>` — search past sessions from inside Claude Code
