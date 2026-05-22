@@ -92,10 +92,10 @@ This installs the [mnemo-memory plugin](#claude-code-plugin) which gives you:
 ### OpenCode plugin
 
 ```bash
-mnemo install opencode
+mnemo install
 ```
 
-Adds mnemo as an MCP tool inside OpenCode. Search and context commands available directly in your coding session.
+Adds mnemo as an MCP server inside OpenCode. Search and context tools are available directly in your coding session after restarting OpenCode.
 
 ## MCP server
 

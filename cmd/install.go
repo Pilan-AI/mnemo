@@ -5,7 +5,7 @@ package cmd
 //   - Claude Code: Installs a skill at ~/.claude/skills/mnemo/ that auto-activates
 //     on context-related keywords
 //   - Claude Desktop: Adds mnemo as an MCP server in claude_desktop_config.json
-//   - OpenCode: Installs a plugin that injects mnemo context during session compaction
+//   - OpenCode: Adds mnemo as an MCP server and installs a compaction plugin
 
 import (
 	"encoding/json"
@@ -25,11 +25,12 @@ var installCmd = &cobra.Command{
 
 This command will:
   1. Install Claude Code skill for context keywords
-  2. Install OpenCode plugin for session compaction
+  2. Configure MCP server in OpenCode
   3. Configure MCP server in Claude Desktop (if installed)
+  4. Install OpenCode plugin for session compaction
 
 The MCP server provides tools like mnemo_search, mnemo_context, and mnemo_recent
-directly in Claude Desktop.`,
+directly in Claude Desktop and OpenCode.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -51,11 +52,11 @@ directly in Claude Desktop.`,
 		fmt.Println("Features enabled:")
 		fmt.Println("  - Claude Code: Skill auto-activates on context keywords")
 		fmt.Println("  - Claude Desktop: MCP tools (mnemo_search, mnemo_context, mnemo_recent)")
-		fmt.Println("  - OpenCode: Context survives session compaction")
+		fmt.Println("  - OpenCode: MCP tools (mnemo_search, mnemo_context, mnemo_recent)")
 		fmt.Println("  - Raycast: Search, context, and recent commands (macOS)")
 		fmt.Println("  - Background indexer: Sessions re-indexed every 30 minutes")
 		fmt.Println()
-		fmt.Println("Note: Restart Claude Desktop to activate MCP server.")
+		fmt.Println("Note: Restart Claude Desktop and OpenCode to activate MCP server.")
 	},
 }
 
@@ -99,6 +100,47 @@ func installMCPConfig(configPath, mnemoPath string) error {
 
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	return nil
+}
+
+// installOpenCodeMCPConfig adds or updates mnemo MCP server in OpenCode config.
+func installOpenCodeMCPConfig(configPath, mnemoPath string) error {
+	var config map[string]interface{}
+
+	if data, err := os.ReadFile(configPath); err == nil {
+		if err := json.Unmarshal(data, &config); err != nil {
+			return fmt.Errorf("failed to parse existing OpenCode config: %w", err)
+		}
+	} else if os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+			return fmt.Errorf("failed to create OpenCode config directory: %w", err)
+		}
+		config = make(map[string]interface{})
+	} else {
+		return fmt.Errorf("failed to read OpenCode config: %w", err)
+	}
+
+	mcp, ok := config["mcp"].(map[string]interface{})
+	if !ok {
+		mcp = make(map[string]interface{})
+		config["mcp"] = mcp
+	}
+
+	mcp["mnemo"] = map[string]interface{}{
+		"type":    "local",
+		"command": []string{mnemoPath, "serve"},
+		"enabled": true,
+	}
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal OpenCode config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write OpenCode config: %w", err)
 	}
 
 	return nil
@@ -149,6 +191,12 @@ func runInstallPlugins(home string) []string {
 	configPath := filepath.Join(claudeDesktopConfigDir, "claude_desktop_config.json")
 	if err := installMCPConfig(configPath, mnemoPath); err == nil {
 		results = append(results, "  ✓ MCP server configured")
+	}
+
+	// MCP server for OpenCode
+	opencodeConfigPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := installOpenCodeMCPConfig(opencodeConfigPath, mnemoPath); err == nil {
+		results = append(results, "  ✓ OpenCode MCP server configured")
 	}
 
 	// OpenCode plugin
