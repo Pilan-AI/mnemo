@@ -194,6 +194,20 @@ var indexCmd = &cobra.Command{
 			}
 		}
 
+		// Index Windsurf (native chat + cascade)
+		windsurfPath := filepath.Join(appSupportDir(home, "Windsurf"), "User", "workspaceStorage")
+		windsurfGlobalPath := filepath.Join(appSupportDir(home, "Windsurf"), "User", "globalStorage", "state.vscdb")
+		if pathExists(windsurfPath) && shouldIndex("windsurf") {
+			if isSourceDBUnchanged(windsurfGlobalPath, "windsurf") {
+				fmt.Printf("  ✓ Windsurf: unchanged\n")
+			} else {
+				sessions, messages := indexWindsurf(home)
+				totalSessions += sessions
+				totalMessages += messages
+				fmt.Printf("  ✓ Windsurf: %d sessions, %d messages\n", sessions, messages)
+			}
+		}
+
 		// Index VS Code extensions (Kilo Code, Cline, Roo Code) across ALL IDEs
 		vscodeIDEs := []string{"Code", "Code - Insiders", "Cursor", "Windsurf", "VSCodium", "Antigravity", "Kiro", "Trae"}
 		clineExtensions := []struct {
@@ -362,15 +376,16 @@ func runOnboarding() {
 
 	// Brand colors per tool
 	brandColor := map[string]lipgloss.Style{
-		"Claude Code":       lipgloss.NewStyle().Foreground(lipgloss.Color("#da7756")),
-		"OpenCode":          lipgloss.NewStyle().Foreground(lipgloss.Color("#00dc82")),
-		"Gemini CLI":        lipgloss.NewStyle().Foreground(lipgloss.Color("#4285F4")),
-		"Cursor":            lipgloss.NewStyle().Foreground(lipgloss.Color("#CCCCCC")),
-		"Codex":             lipgloss.NewStyle().Foreground(lipgloss.Color("#10a37f")),
-		"Amp":               lipgloss.NewStyle().Foreground(lipgloss.Color("#F34E3F")),
-		"Kiro":              lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900")),
-		"Crush":             lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6EC7")),
-		"Antigravity":       lipgloss.NewStyle().Foreground(lipgloss.Color("#8AB4F8")),
+		"Claude Code":        lipgloss.NewStyle().Foreground(lipgloss.Color("#da7756")),
+		"OpenCode":           lipgloss.NewStyle().Foreground(lipgloss.Color("#00dc82")),
+		"Gemini CLI":         lipgloss.NewStyle().Foreground(lipgloss.Color("#4285F4")),
+		"Cursor":             lipgloss.NewStyle().Foreground(lipgloss.Color("#CCCCCC")),
+		"Windsurf":           lipgloss.NewStyle().Foreground(lipgloss.Color("#00D9FF")),
+		"Codex":              lipgloss.NewStyle().Foreground(lipgloss.Color("#10a37f")),
+		"Amp":                lipgloss.NewStyle().Foreground(lipgloss.Color("#F34E3F")),
+		"Kiro":               lipgloss.NewStyle().Foreground(lipgloss.Color("#FF9900")),
+		"Crush":              lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6EC7")),
+		"Antigravity":        lipgloss.NewStyle().Foreground(lipgloss.Color("#8AB4F8")),
 		"VS Code Extensions": lipgloss.NewStyle().Foreground(lipgloss.Color("#007ACC")),
 	}
 
@@ -440,6 +455,13 @@ func runOnboarding() {
 			p := filepath.Join(appSupportDir(home, "Kiro"), "User", "globalStorage", "kiro.kiroagent", "workspace-sessions")
 			if pathExists(p) {
 				return indexKiro(p)
+			}
+			return 0, 0
+		}},
+		{"Windsurf", func() (int, int) {
+			p := filepath.Join(appSupportDir(home, "Windsurf"), "User", "workspaceStorage")
+			if pathExists(p) {
+				return indexWindsurf(home)
 			}
 			return 0, 0
 		}},
